@@ -5,7 +5,7 @@ Uses open-source transformers, spaCy, and semantic similarity
 import os
 import re
 import numpy as np
-from typing import List, Dict, Any, Tuple, Set
+from typing import List, Dict, Any, Tuple, Set, Optional
 from collections import defaultdict, Counter
 import warnings
 warnings.filterwarnings('ignore')
@@ -18,60 +18,67 @@ class NLPEngine:
         self.domain_keywords = self._load_domain_patterns()
         
     def _load_domain_patterns(self) -> Dict[str, List[str]]:
-        """Define comprehensive domain-specific keywords for microservice identification"""
+        """
+        Define 6 core domain-specific bounded contexts for microservice identification.
+        Based on Domain-Driven Design principles and industry best practices.
+        Optimized for 5-6 service generation instead of synthetic 12+ services.
+        """
         return {
-            "Authentication & Identity": [
+            # Domain 1: Identity & Access Management
+            "Identity & Access": [
                 "auth", "login", "register", "signup", "user", "password", "jwt", "token",
                 "session", "oauth", "sso", "identity", "credential", "permission", "role",
-                "access control", "authorization", "authentication"
+                "access control", "authorization", "authentication", "user profile", "account",
+                "user settings", "preferences", "user data", "user registration", "user account",
+                "profile management", "customer profile", "user identity", "rbac"
             ],
-            "Order Management": [
+            
+            # Domain 2: Business Core (Transactions & Catalog)
+            "Business Core": [
                 "order", "cart", "checkout", "purchase", "buy", "shopping", "basket",
                 "order processing", "fulfillment", "order status", "order tracking",
-                "order history", "order lifecycle"
-            ],
-            "Payment & Billing": [
-                "payment", "pay", "invoice", "billing", "charge", "refund", "transaction",
-                "stripe", "paypal", "credit card", "pricing", "subscription", "checkout payment",
-                "payment gateway", "payment processing", "financial transaction"
-            ],
-            "Notification & Communication": [
-                "notification", "notify", "email", "sms", "alert", "message", "push",
-                "send email", "send message", "communication", "reminder", "template",
-                "notification service", "messaging"
-            ],
-            "Inventory & Catalog": [
+                "order history", "order lifecycle", "payment", "pay", "invoice", "billing",
+                "charge", "refund", "transaction", "stripe", "paypal", "credit card", "pricing",
+                "subscription", "payment gateway", "payment processing", "financial transaction",
                 "inventory", "stock", "warehouse", "product", "catalog", "item", "sku",
                 "product catalog", "product list", "stock level", "inventory management",
-                "supplier", "product details"
+                "supplier", "product details", "price", "discount", "cart management"
             ],
-            "User Management": [
-                "user profile", "account", "user settings", "preferences", "user data",
-                "user registration", "user account", "profile management", "customer"
-            ],
-            "Analytics & Reporting": [
-                "analytics", "report", "dashboard", "metrics", "kpi", "insights", "statistics",
-                "monitoring", "tracking", "analysis", "data visualization", "business intelligence"
-            ],
-            "Search & Discovery": [
-                "search", "filter", "query", "browse", "discover", "find", "recommendation",
-                "search engine", "indexing", "elasticsearch"
-            ],
-            "Content Management": [
-                "content", "cms", "document", "media", "upload", "file", "asset",
-                "content management", "digital asset", "file storage"
-            ],
-            "Shipping & Logistics": [
+            
+            # Domain 3: Logistics & Fulfillment
+            "Logistics & Fulfillment": [
                 "shipping", "delivery", "logistics", "tracking", "carrier", "address",
-                "shipment", "delivery status", "shipping address", "courier"
+                "shipment", "delivery status", "shipping address", "courier", "warehouse",
+                "fulfillment center", "dispatch", "route", "transit", "package", "delivery tracking",
+                "shipping label", "shipping cost", "delivery time", "tracking number", "fulfillment"
             ],
-            "Customer Support": [
+            
+            # Domain 4: Notification & Events
+            "Notification & Events": [
+                "notification", "notify", "email", "sms", "alert", "message", "push",
+                "send email", "send message", "communication", "reminder", "template",
+                "notification service", "messaging", "event", "webhook", "broadcast",
+                "message queue", "event bus", "publish", "subscribe", "push notification",
+                "email template", "sms gateway", "communication channel"
+            ],
+            
+            # Domain 5: Data & Analytics
+            "Data & Analytics": [
+                "analytics", "report", "dashboard", "metrics", "kpi", "insights", "statistics",
+                "monitoring", "tracking", "analysis", "data visualization", "business intelligence",
+                "reporting", "data warehouse", "etl", "data pipeline", "telemetry", "logs",
+                "audit", "metrics collection", "real-time analytics", "batch processing"
+            ],
+            
+            # Domain 6: Support & Engagement
+            "Support & Engagement": [
                 "support", "ticket", "help", "chat", "feedback", "complaint", "issue",
-                "customer service", "support ticket", "help desk"
-            ],
-            "Product Reviews": [
-                "review", "rating", "comment", "feedback", "testimonial", "rate product",
-                "product review", "user review", "rating system"
+                "customer service", "support ticket", "help desk", "review", "rating",
+                "comment", "testimonial", "rate product", "product review", "user review",
+                "rating system", "search", "filter", "query", "browse", "discover", "find",
+                "recommendation", "search engine", "indexing", "elasticsearch", "content",
+                "cms", "document", "media", "upload", "file", "asset", "content management",
+                "digital asset", "file storage", "faq", "knowledge base"
             ]
         }
         
@@ -88,10 +95,10 @@ class NLPEngine:
             
             try:
                 self.nlp = spacy.load("en_core_web_sm")
-                print("✅ spaCy model 'en_core_web_sm' loaded successfully")
+                print("[OK] spaCy model 'en_core_web_sm' loaded successfully")
             except OSError:
                 # Download if not available - use subprocess for better error handling
-                print("📥 Downloading spaCy model 'en_core_web_sm'...")
+                print("[INFO] Downloading spaCy model 'en_core_web_sm'...")
                 try:
                     subprocess.check_call(
                         [sys.executable, "-m", "spacy", "download", "en_core_web_sm"],
@@ -99,27 +106,27 @@ class NLPEngine:
                         stderr=subprocess.PIPE
                     )
                     self.nlp = spacy.load("en_core_web_sm")
-                    print("✅ spaCy model downloaded and loaded successfully")
+                    print("[OK] spaCy model downloaded and loaded successfully")
                 except Exception as download_error:
-                    print(f"⚠️ Failed to download spaCy model: {download_error}")
-                    print("💡 Please run manually: python -m spacy download en_core_web_sm")
+                    print(f"[WARNING] Failed to download spaCy model: {download_error}")
+                    print("[INFO] Please run manually: python -m spacy download en_core_web_sm")
                     raise
                 
             # Initialize sentence transformer for semantic similarity
             from sentence_transformers import SentenceTransformer
-            print("📥 Loading sentence transformer model...")
+            print("[INFO] Loading sentence transformer model...")
             self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
             
             self.initialized = True
-            print("✅ NLP Engine initialized successfully")
+            print("[OK] NLP Engine initialized successfully")
         except Exception as e:
-            print(f"⚠️ NLP initialization failed: {e}. Using fallback heuristics.")
-            print("💡 The system will still work with reduced accuracy using rule-based methods.")
+            print(f"[WARNING] NLP initialization failed: {e}. Using fallback heuristics.")
+            print("[INFO] The system will still work with reduced accuracy using rule-based methods.")
             self.initialized = False
             
     def extract_entities_and_actions(self, text: str) -> Dict[str, List[str]]:
         """Extract entities, actions, and key concepts from text"""
-        if not self.initialized:
+        if not self.initialized or self.nlp is None:
             return self._fallback_extraction(text)
             
         doc = self.nlp(text.lower())
@@ -168,7 +175,7 @@ class NLPEngine:
             "concepts": list(set(concepts[:50]))  # Limit to top 50
         }
         
-    def identify_service_domains(self, text: str, sections: Dict[str, str] = None) -> List[Tuple[str, float, List[str]]]:
+    def identify_service_domains(self, text: str, sections: Optional[Dict[str, str]] = None) -> List[Tuple[str, float, List[str]]]:
         """
         Identify potential microservice domains using semantic analysis
         Returns: List of (domain_name, confidence_score, matched_keywords)
