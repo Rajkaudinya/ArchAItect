@@ -267,26 +267,32 @@ function App() {
               </div>
             </div>
 
-            {/* Requirement Preview / Operational Context */}
+            {/* Parsed Document Preview */}
             <div className="lg:col-span-2 glass-panel p-5 rounded-2xl border border-slate-900 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between pb-3.5 border-b border-slate-800/60 mb-4">
-                  <h4 className="text-sm font-extrabold uppercase tracking-widest text-white">Parsed Document Stream Preview</h4>
+                  <h4 className="text-sm font-extrabold uppercase tracking-widest text-white">Parsed Document Preview</h4>
                   <span className="text-[10px] bg-slate-800 text-indigo-400 border border-slate-700 px-2 py-0.5 rounded font-mono font-bold">
-                    PREVIEW
+                    {analysisResult ? analysisResult.raw_filename : 'PREVIEW'}
                   </span>
                 </div>
                 {analysisResult ? (
                   <div>
-                    <blockquote className="text-xs text-gray-300 italic bg-slate-950/40 p-4 rounded-xl border border-slate-900 leading-relaxed font-mono max-h-[120px] overflow-y-auto">
-                      "{analysisResult.raw_content_preview}"
+                    <blockquote className="text-xs text-gray-300 italic bg-slate-950/40 p-4 rounded-xl border border-slate-900 leading-relaxed font-mono max-h-[180px] overflow-y-auto whitespace-pre-wrap">
+                      {analysisResult.raw_content_preview}
                     </blockquote>
                     <div className="mt-4 flex flex-wrap gap-2">
                       <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-medium">
-                        ✓ {analysisResult.microservices.length} services extracted
+                        {analysisResult.microservices.length} services extracted
                       </span>
                       <span className="text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded font-medium">
-                        ✓ {analysisResult.dependencies.length} boundaries mapped
+                        {analysisResult.dependencies.length} boundaries mapped
+                      </span>
+                      <span className="text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded font-medium">
+                        {new Set(analysisResult.microservices.map(s => s.domain)).size} domains
+                      </span>
+                      <span className="text-[10px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded font-medium">
+                        {analysisResult.dependencies.length > 0 ? Math.round((analysisResult.dependencies.filter(d => d.type === 'async').length / analysisResult.dependencies.length) * 100) : 0}% async
                       </span>
                     </div>
                   </div>
