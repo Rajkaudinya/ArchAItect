@@ -23,6 +23,7 @@ class MicroserviceSchema(BaseModel):
     database_reasoning: str
     apis: List[ApiEndpoint] = []
     scaling_recommendations: List[str] = []
+    metadata: Optional[Dict[str, Any]] = {}
 
 class MetricScores(BaseModel):
     scalability: int = Field(..., ge=0, le=100)
@@ -38,3 +39,13 @@ class AnalysisResult(BaseModel):
     dependencies: List[DependencyInfo] = []
     metrics: MetricScores
     raw_feedback: Optional[str] = ""
+    analysis_metadata: Optional[Dict[str, Any]] = {}
+    
+    # Aliases for backward compatibility
+    @property
+    def filename(self):
+        return self.raw_filename
+    
+    @property
+    def content_preview(self):
+        return self.raw_content_preview

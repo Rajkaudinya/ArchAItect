@@ -24,6 +24,7 @@ export interface Microservice {
   database_reasoning: string;
   apis: ApiEndpoint[];
   scaling_recommendations: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface Dependency {
@@ -40,6 +41,15 @@ export interface MetricScores {
   fault_isolation: number;
 }
 
+export interface TraceabilityRow {
+  service_id: string;
+  service_name: string;
+  domain: string;
+  confidence: number;
+  matched_keywords: string[];
+  requirement_sentences: string[];
+}
+
 export interface AnalysisResult {
   project_id: string;
   raw_filename: string;
@@ -48,4 +58,8 @@ export interface AnalysisResult {
   dependencies: Dependency[];
   metrics: MetricScores;
   raw_feedback: string;
+  analysis_metadata?: {
+    traceability?: TraceabilityRow[];
+    [key: string]: unknown;
+  };
 }

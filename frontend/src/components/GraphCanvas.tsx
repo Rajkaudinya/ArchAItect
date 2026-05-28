@@ -303,9 +303,25 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                   <span className="text-[9px] bg-slate-800/80 text-emerald-400 font-semibold px-1.5 py-0.5 rounded border border-slate-700/50">
                     {service.database.split(" ")[0]}
                   </span>
-                  <span className="text-[9px] text-slate-400 font-mono font-medium">
-                    {service.apis.length} APIs
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {service.metadata?.cohesion_score !== undefined && (
+                      <span
+                        title={`Cohesion: ${Math.round(service.metadata.cohesion_score as number)}%`}
+                        className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+                          (service.metadata.cohesion_score as number) >= 70
+                            ? 'bg-teal-500/10 text-teal-400 border-teal-500/20'
+                            : (service.metadata.cohesion_score as number) >= 40
+                            ? 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+                            : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                        }`}
+                      >
+                        C:{Math.round(service.metadata.cohesion_score as number)}%
+                      </span>
+                    )}
+                    <span className="text-[9px] text-slate-400 font-mono font-medium">
+                      {service.apis.length} APIs
+                    </span>
+                  </div>
                 </div>
               </div>
             );
@@ -355,6 +371,23 @@ export const GraphCanvas: React.FC<GraphCanvasProps> = ({
                     {selectedService.domain}
                   </span>
                 </div>
+                {selectedService.metadata?.cohesion_score !== undefined && (() => {
+                  const score = Math.round(selectedService.metadata.cohesion_score as number);
+                  const color = score >= 70 ? 'bg-teal-500' : score >= 40 ? 'bg-yellow-500' : 'bg-rose-500';
+                  const label = score >= 70 ? 'High Cohesion' : score >= 40 ? 'Moderate Cohesion' : 'Low Cohesion';
+                  return (
+                    <div>
+                      <label className="text-[9px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Domain Cohesion Score</label>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 bg-slate-800/85 h-1.5 rounded-full overflow-hidden border border-slate-700/30">
+                          <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${score}%` }} />
+                        </div>
+                        <span className="text-[10px] font-bold text-white w-8 text-right">{score}%</span>
+                        <span className="text-[9px] text-slate-400">{label}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div>
                   <label className="text-[9px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Core Responsibilities</label>
                   <textarea 
