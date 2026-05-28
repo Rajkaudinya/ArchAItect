@@ -1,12 +1,14 @@
 import os
 import json
+import logging
 from datetime import datetime
 from uuid import uuid4
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, HTTPException, Path, status
 from typing import List
 from app.config import settings
 from app.models.project import ProjectInDB, ProjectCreate, ProjectUpdate
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 def get_projects_file() -> str:
@@ -32,35 +34,78 @@ def save_projects(projects: List[dict]):
 
 @router.get("", response_model=List[ProjectInDB])
 def list_projects():
-    projects = load_projects()
-    # Add dummy onboarding project if empty
-    if not projects:
-        onboarding = {
-            "id": "project-onboarding",
-            "name": "E-Commerce System Blueprint",
-            "description": "Demonstration template mapping checkout services, gateways, and catalogs.",
+    """List all projects with error handling"""
+    try:
+        projects = load_projects()
+        # Add dummy onboarding project if empty
+        if not projects:
+            onboarding = {
+                "id": "project-onboarding",
+                "name": "E-Commerce System Blueprint",
+                "description": "Demonstration template mapping checkout services, gateways, and catalogs.",
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+                "version": 1
+            }
+            projects.append(onboarding)
+            save_projects(projects)
+        logger.info(f"Retrieved {len(projects)} projects")
+        return projects
+    except Exception as e:
+        logger.error(f"Failed to list projects: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve projects"
+        )
+
+@router.post("", response_model=ProjectInDB)
+def create_project(payload: ProjectCreate):
+    """Create a new project with validation"""
+    try:
+        if not payload.name or len(payload.name.strip()) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Project name cannot be empty"
+            )
+        
+        if len(payload.name) > 200:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Project name must be less than 200 characters"
+            )
+        
+        projects = load_projects()
+        
+        # Check for duplicate project names
+        if any(p["name"].lower() == payload.name.lower() for p in projects):
+            logger.warning(f"Attempted to create duplicate project: {payload.name}")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A project with this name already exists"
+            )
+        
+        new_project = {
+            "id": f"project-{uuid4().hex[:8]}",
+            "name": payload.name.strip(),
+            "description": payload.description.strip() if payload.description else "",
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
             "version": 1
         }
-        projects.append(onboarding)
+        projects.append(new_project)
         save_projects(projects)
-    return projects
-
-@router.post("", response_model=ProjectInDB)
-def create_project(payload: ProjectCreate):
-    projects = load_projects()
-    new_project = {
-        "id": f"project-{uuid4().hex[:8]}",
-        "name": payload.name,
-        "description": payload.description or "",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
-        "version": 1
-    }
-    projects.append(new_project)
-    save_projects(projects)
-    return new_project
+        
+        logger.info(f"Created new project: {new_project['id']} - {new_project['name']}")
+        return new_project
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create project: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create project"
+        )
 
 @router.delete("/{project_id}")
 def delete_project(project_id: str = Path(...)):

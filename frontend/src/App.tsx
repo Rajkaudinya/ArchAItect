@@ -3,6 +3,7 @@ import { Project, AnalysisResult, Microservice, Dependency } from './types';
 import { FileUpload } from './components/FileUpload';
 import { GraphCanvas } from './components/GraphCanvas';
 import { MetricsGrid } from './components/MetricsGrid';
+import { TraceabilityTable } from './components/TraceabilityTable';
 import { LayoutGrid, Layers, RefreshCw, FolderPlus, FolderOpen, Heart, Eye, ArrowRight, Trash2 } from 'lucide-react';
 
 function App() {
@@ -320,6 +321,20 @@ function App() {
                   dependencies={analysisResult.dependencies}
                   onSaveArchitecture={handleSaveArchitecture}
                 />
+              </div>
+
+              {/* Requirements Traceability Matrix */}
+              <div className="glass-panel p-5 rounded-3xl border border-slate-900">
+                <div className="flex items-center justify-between pb-4 border-b border-slate-900 mb-4">
+                  <div>
+                    <h4 className="text-sm font-extrabold uppercase tracking-widest text-white">Requirements Traceability Matrix</h4>
+                    <p className="text-xs text-slate-500 mt-1 font-light">Maps each requirement sentence to the microservice boundary it justifies.</p>
+                  </div>
+                  <span className="text-[10px] bg-slate-800 text-indigo-400 border border-slate-700 px-2.5 py-1 rounded font-bold font-mono">
+                    {analysisResult.analysis_metadata?.traceability?.length ?? 0} SERVICES TRACED
+                  </span>
+                </div>
+                <TraceabilityTable rows={analysisResult.analysis_metadata?.traceability ?? []} />
               </div>
             </div>
           )}
