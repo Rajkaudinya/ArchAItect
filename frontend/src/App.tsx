@@ -1,367 +1,238 @@
-import { useState, useEffect } from 'react';
-import { Project, AnalysisResult, Microservice, Dependency } from './types';
-import { FileUpload } from './components/FileUpload';
-import { GraphCanvas } from './components/GraphCanvas';
-import { MetricsGrid } from './components/MetricsGrid';
-import { TraceabilityTable } from './components/TraceabilityTable';
-import { LayoutGrid, Layers, RefreshCw, FolderPlus, FolderOpen, Heart, Eye, ArrowRight, Trash2 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
+import { Download, Activity } from "lucide-react";
+import { analyzeStream } from "@/lib/api";
+import type { Architecture, StepEvent } from "@/types/architecture";
+import { PIPELINE_STEPS } from "@/types/architecture";
+import Logo from "@/components/Logo";
+import InputPanel from "@/components/InputPanel";
+import PipelineConsole from "@/components/PipelineConsole";
+import ServiceMap from "@/components/ServiceMap";
+import ServiceDrawer from "@/components/ServiceDrawer";
+import CompetitorPanel from "@/components/CompetitorPanel";
+import ResultsSkeleton from "@/components/ResultsSkeleton";
 
-function App() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [currentProject, setCurrentProject] = useState<Project | null>(null);
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
-  
-  const [newProjectName, setNewProjectName] = useState("");
-  const [isCreatingProject, setIsCreatingProject] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+type StepStatus = "pending" | "running" | "done";
+type BackendState = "checking" | "online" | "offline";
 
-  // Fetch initial list of projects
+function initialStatuses(): Record<string, StepStatus> {
+  const o: Record<string, StepStatus> = {};
+  PIPELINE_STEPS.forEach((s) => (o[s.key] = "pending"));
+  return o;
+}
+
+export default function App() {
+  const [running, setRunning] = useState(false);
+  const [statuses, setStatuses] = useState(initialStatuses);
+  const [arch, setArch] = useState<Architecture | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<BackendState>("checking");
+
+  // Ping the backend so the header shows a real status, not a fake tag.
   useEffect(() => {
-    fetchProjects();
+    let alive = true;
+    fetch("http://localhost:8000/api/health")
+      .then((r) => (r.ok ? setBackend("online") : setBackend("offline")))
+      .catch(() => alive && setBackend("offline"));
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const fetchProjects = async () => {
-    try {
-      const res = await fetch("http://localhost:8000/api/v1/projects");
-      if (res.ok) {
-        const data = await res.json();
-        setProjects(data);
-        if (data.length > 0 && !currentProject) {
-          // Select onboarding blueprint by default
-          selectProject(data[0]);
-        }
-      }
-    } catch (err) {
-      console.error("Backend offline. Fallback to offline mode.", err);
-    }
-  };
+  const selectedService = useMemo(
+    () => arch?.services.find((s) => s.id === selectedId) ?? null,
+    [arch, selectedId]
+  );
 
-  const selectProject = async (project: Project) => {
-    setCurrentProject(project);
-    setIsLoading(true);
+  const onSelect = useCallback((id: string) => setSelectedId(id || null), []);
+
+  function exportJson() {
+    if (!arch) return;
+    const blob = new Blob([JSON.stringify(arch, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${arch.app_type.replace(/\s+/g, "-").toLowerCase()}-architecture.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function run(doc: string) {
+    setRunning(true);
+    setError(null);
+    setArch(null);
+    setSelectedId(null);
+    setStatuses(initialStatuses());
+
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/analysis/${project.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setAnalysisResult(data);
-      } else {
-        setAnalysisResult(null);
-      }
+      const result = await analyzeStream(doc, (e: StepEvent) => {
+        if (e.step === "result") return;
+        setStatuses((prev) => {
+          const next = { ...prev };
+          if (e.status === "running") next[e.step] = "running";
+          if (e.status === "done") next[e.step] = "done";
+          return next;
+        });
+      });
+      setArch(result);
     } catch (err) {
-      console.error(err);
+      setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
-      setIsLoading(false);
+      setRunning(false);
     }
-  };
-
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProjectName.trim()) return;
-
-    try {
-      const res = await fetch("http://localhost:8000/api/v1/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newProjectName, description: "Software architecture requirements mapping project." })
-      });
-      if (res.ok) {
-        const newProj = await res.json();
-        setProjects(prev => [...prev, newProj]);
-        setNewProjectName("");
-        setIsCreatingProject(false);
-        selectProject(newProj);
-      }
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleDeleteProject = async (projectId: string) => {
-    if (!window.confirm("⚠️ Are you sure you want to delete this blueprint workspace? This will permanently wipe all generated topologies and cached services.")) return;
-    try {
-      const res = await fetch(`http://localhost:8000/api/v1/projects/${projectId}`, {
-        method: "DELETE"
-      });
-      if (res.ok) {
-        const updated = projects.filter(p => p.id !== projectId);
-        setProjects(updated);
-        alert("🗑️ Blueprint deleted successfully.");
-        if (updated.length > 0) {
-          selectProject(updated[0]);
-        } else {
-          setCurrentProject(null);
-          setAnalysisResult(null);
-        }
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Failed to delete project.");
-    }
-  };
-
-  const handleSaveArchitecture = async (updatedServices: Microservice[], updatedDeps: Dependency[]) => {
-    if (!analysisResult || !currentProject) return;
-    
-    const updatedResult: AnalysisResult = {
-      ...analysisResult,
-      microservices: updatedServices,
-      dependencies: updatedDeps
-    };
-
-    try {
-      const res = await fetch(`http://localhost:8000/api/v1/analysis/${currentProject.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updatedResult)
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setAnalysisResult(data);
-        alert("💾 System architecture updates saved successfully to backend database cache!");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Failed to save changes. Make sure backend is running.");
-    }
-  };
+  }
 
   return (
-    <div className="min-h-screen pb-16 px-4 md:px-8 max-w-[1400px] mx-auto pt-6">
-      {/* Header Panel */}
-      <header className="flex flex-col md:flex-row items-start md:items-center justify-between pb-6 mb-8 border-b border-slate-900">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <span className="text-2xl">🏛️</span>
-            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight bg-gradient-to-r from-teal-400 via-emerald-400 to-indigo-400 bg-clip-text text-transparent">
-              ArchAItect
+    <div className="min-h-screen">
+      {/* Glass header */}
+      <header className="glass sticky top-0 z-30 border-b" style={{ borderColor: "var(--line)" }}>
+        <div className="mx-auto flex max-w-[1400px] items-center gap-3 px-6 py-3.5">
+          <Logo size={38} />
+          <div>
+            <h1 className="font-mono text-lg font-extrabold tracking-tight" style={{ color: "var(--ink)" }}>
+              Arch<span className="accent-amber">AI</span>tect
             </h1>
-            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider">
-              V1.0.0 Stable
-            </span>
-          </div>
-          <p className="text-xs text-slate-400 mt-1 font-medium italic">
-            “Transforming Software Requirements into Intelligent, Scalable Microservice Architectures.”
-          </p>
-        </div>
-        
-        {/* Project Selector bar */}
-        <div className="flex items-center gap-3.5 mt-4 md:mt-0">
-          <div className="flex items-center gap-2 bg-slate-900/60 border border-slate-800 px-3.5 py-2 rounded-xl text-xs">
-            <FolderOpen size={14} className="text-emerald-400" />
-            <select 
-              value={currentProject?.id || ""} 
-              onChange={(e) => {
-                const proj = projects.find(p => p.id === e.target.value);
-                if (proj) selectProject(proj);
-              }}
-              className="bg-transparent border-none focus:outline-none text-white font-semibold cursor-pointer"
-            >
-              <option value="" disabled className="bg-[#080b11]">Select Active Project</option>
-              {projects.map(p => (
-                <option key={p.id} value={p.id} className="bg-[#080b11] text-gray-200">
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            <p className="text-[10px]" style={{ color: "var(--ink-faint)" }}>
+              Requirements → microservice architecture
+            </p>
           </div>
 
-          <button
-            onClick={() => setIsCreatingProject(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 transition-all text-xs font-semibold text-white rounded-xl border border-slate-700/50"
-          >
-            <FolderPlus size={14} />
-            <span>New Blueprint</span>
-          </button>
+          <div className="ml-auto flex items-center gap-2.5">
+            {/* real backend status */}
+            <div className="flex items-center gap-2 rounded-lg px-3 py-1.5"
+              style={{ border: "1px solid var(--line)", background: "rgba(255,255,255,0.015)" }}>
+              <span
+                className={backend === "online" ? "pulse" : ""}
+                style={{
+                  width: 7, height: 7, borderRadius: 99,
+                  background: backend === "online" ? "var(--cyan)" : backend === "offline" ? "var(--rose)" : "var(--amber)",
+                  boxShadow: backend === "online" ? "0 0 8px var(--cyan)" : "none",
+                }}
+              />
+              <span className="font-mono text-[10px]" style={{ color: "var(--ink-dim)" }}>
+                {backend === "online" ? "engine online" : backend === "offline" ? "engine offline" : "connecting…"}
+              </span>
+            </div>
 
-          {currentProject && (
+            {/* export — only useful once we have a result */}
             <button
-              onClick={() => handleDeleteProject(currentProject.id)}
-              title="Delete current blueprint"
-              className="flex items-center gap-1.5 px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 active:scale-95 transition-all text-xs font-semibold text-rose-400 rounded-xl border border-rose-500/20"
+              onClick={exportJson}
+              disabled={!arch}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 font-mono text-[10px] transition-colors"
+              style={{
+                border: "1px solid var(--line)",
+                color: arch ? "var(--cyan)" : "var(--ink-faint)",
+                cursor: arch ? "pointer" : "not-allowed",
+                background: "rgba(255,255,255,0.015)",
+              }}
             >
-              <Trash2 size={14} />
-              <span>Delete Blueprint</span>
+              <Download size={12} />
+              export json
             </button>
-          )}
+          </div>
         </div>
       </header>
 
-      {/* New Project Dialog */}
-      {isCreatingProject && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-50 p-4">
-          <form onSubmit={handleCreateProject} className="w-full max-w-md glass-panel rounded-3xl p-6 border border-slate-800 shadow-2xl">
-            <h3 className="text-lg font-bold text-white mb-2">Create Architecture Project</h3>
-            <p className="text-xs text-gray-400 mb-4 leading-relaxed">
-              Design a separate context workspace mapping microservices, data assets, and API routes for your platform.
-            </p>
-            <input 
-              type="text" 
-              placeholder="e.g. Ride Sharing Enterprise System"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              className="w-full bg-slate-900/80 border border-slate-800 text-sm rounded-2xl px-4 py-3 text-white focus:outline-none focus:border-emerald-500 mb-4"
-              required
-            />
-            <div className="flex gap-2 justify-end">
-              <button 
-                type="button" 
-                onClick={() => setIsCreatingProject(false)} 
-                className="px-4 py-2 bg-slate-800 text-slate-300 hover:bg-slate-700 text-xs font-semibold rounded-xl"
-              >
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white rounded-xl border border-emerald-500/20"
-              >
-                Create Workspace
-              </button>
-            </div>
-          </form>
+      <main className="mx-auto max-w-[1400px] px-6 py-6">
+        {/* Top row: input + pipeline */}
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.6fr_1fr]">
+          <InputPanel onRun={run} running={running} />
+          <PipelineConsole statuses={statuses} active={running} />
         </div>
-      )}
 
-      {currentProject ? (
-        <div className="space-y-6">
-          {/* Workspace Title Grid */}
-          <div className="glass-panel p-5 rounded-2xl border border-slate-900 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div className="flex items-center gap-4">
-              <div>
-                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Active Design System</span>
-                <h2 className="text-xl font-extrabold text-white mt-0.5">{currentProject.name}</h2>
-              </div>
-              <button
-                onClick={() => handleDeleteProject(currentProject.id)}
-                title="Delete this blueprint workspace"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 active:scale-95 transition-all text-[10px] font-bold uppercase tracking-wider text-rose-400 rounded-xl border border-rose-500/20 ml-2"
-              >
-                <Trash2 size={12} />
-                <span>Delete</span>
-              </button>
-            </div>
-            {analysisResult && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl font-mono text-gray-300">
-                  📁 {analysisResult.raw_filename}
-                </span>
-                <button 
-                  onClick={() => selectProject(currentProject)}
-                  className="p-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-all"
-                  title="Reload Architecture Heuristics"
-                >
-                  <RefreshCw size={14} />
-                </button>
-              </div>
-            )}
+        {error && (
+          <div className="panel mt-5 p-4" style={{ borderColor: "var(--rose)" }}>
+            <span className="font-mono text-xs" style={{ color: "var(--rose)" }}>error: {error}</span>
           </div>
+        )}
 
-          {/* Core Analytics Upload Section */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-1 glass-panel p-5 rounded-2xl border border-slate-900 flex flex-col justify-between h-fit">
-              <div>
-                <h4 className="text-sm font-extrabold uppercase tracking-widest text-white mb-2">Requirements Ingestion</h4>
-                <p className="text-xs text-slate-400 mb-4 leading-relaxed font-light">
-                  Input system specifications to parse. The parser segments sections and identifies boundary contexts.
-                </p>
-                <FileUpload onUploadSuccess={(data) => setAnalysisResult(data)} projectId={currentProject.id} />
-              </div>
-            </div>
+        {/* Skeleton while running */}
+        {running && !arch && <ResultsSkeleton />}
 
-            {/* Parsed Document Preview */}
-            <div className="lg:col-span-2 glass-panel p-5 rounded-2xl border border-slate-900 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between pb-3.5 border-b border-slate-800/60 mb-4">
-                  <h4 className="text-sm font-extrabold uppercase tracking-widest text-white">Parsed Document Preview</h4>
-                  <span className="text-[10px] bg-slate-800 text-indigo-400 border border-slate-700 px-2 py-0.5 rounded font-mono font-bold">
-                    {analysisResult ? analysisResult.raw_filename : 'PREVIEW'}
-                  </span>
-                </div>
-                {analysisResult ? (
-                  <div>
-                    <blockquote className="text-xs text-gray-300 italic bg-slate-950/40 p-4 rounded-xl border border-slate-900 leading-relaxed font-mono max-h-[180px] overflow-y-auto whitespace-pre-wrap">
-                      {analysisResult.raw_content_preview}
-                    </blockquote>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-medium">
-                        {analysisResult.microservices.length} services extracted
-                      </span>
-                      <span className="text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-2 py-0.5 rounded font-medium">
-                        {analysisResult.dependencies.length} boundaries mapped
-                      </span>
-                      <span className="text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20 px-2 py-0.5 rounded font-medium">
-                        {new Set(analysisResult.microservices.map(s => s.domain)).size} domains
-                      </span>
-                      <span className="text-[10px] bg-orange-500/10 text-orange-400 border border-orange-500/20 px-2 py-0.5 rounded font-medium">
-                        {analysisResult.dependencies.length > 0 ? Math.round((analysisResult.dependencies.filter(d => d.type === 'async').length / analysisResult.dependencies.length) * 100) : 0}% async
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-center py-10">
-                    <p className="text-xs text-slate-500 italic">No document analyzed yet. Drag a requirements sheet to parse topology.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Metrics Dashboard Monitoring Grid */}
-          {analysisResult && (
-            <div className="space-y-6">
-              <MetricsGrid metrics={analysisResult.metrics} />
-              
-              {/* Draggable Topology Graph and Custom Inspector */}
-              <div className="glass-panel p-5 rounded-3xl border border-slate-900">
-                <div className="flex items-center justify-between pb-4 border-b border-slate-900 mb-6">
-                  <div>
-                    <h4 className="text-sm font-extrabold uppercase tracking-widest text-white">Microservice Connection Topology Mapping</h4>
-                    <p className="text-xs text-slate-500 mt-1 font-light">Interactive architectural blueprint diagram. Customize routes or edit service boundaries below.</p>
-                  </div>
-                  <span className="text-[10px] bg-slate-800 text-indigo-400 border border-slate-700 px-2.5 py-1 rounded font-bold font-mono">
-                    INTERACTIVE CANVAS
-                  </span>
-                </div>
-                
-                <GraphCanvas 
-                  services={analysisResult.microservices} 
-                  dependencies={analysisResult.dependencies}
-                  onSaveArchitecture={handleSaveArchitecture}
-                />
-              </div>
-
-              {/* Requirements Traceability Matrix */}
-              <div className="glass-panel p-5 rounded-3xl border border-slate-900">
-                <div className="flex items-center justify-between pb-4 border-b border-slate-900 mb-4">
-                  <div>
-                    <h4 className="text-sm font-extrabold uppercase tracking-widest text-white">Requirements Traceability Matrix</h4>
-                    <p className="text-xs text-slate-500 mt-1 font-light">Maps each requirement sentence to the microservice boundary it justifies.</p>
-                  </div>
-                  <span className="text-[10px] bg-slate-800 text-indigo-400 border border-slate-700 px-2.5 py-1 rounded font-bold font-mono">
-                    {analysisResult.analysis_metadata?.traceability?.length ?? 0} SERVICES TRACED
-                  </span>
-                </div>
-                <TraceabilityTable rows={analysisResult.analysis_metadata?.traceability ?? []} />
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="text-center py-20 bg-slate-900/20 rounded-3xl border border-slate-900/60 max-w-2xl mx-auto mt-12 px-6">
-          <FolderPlus size={48} className="mx-auto text-emerald-500/50 mb-4" />
-          <h3 className="text-lg font-bold text-white">Create your first Blueprint Workspace</h3>
-          <p className="text-xs text-slate-400 mt-2 max-w-md mx-auto leading-relaxed">
-            ArchAItect enables software engineering teams to analyze large legacy design requirements into microservices instantly. Establish your target project to begin.
-          </p>
-          <button 
-            onClick={() => setIsCreatingProject(true)}
-            className="mt-6 px-6 py-3 bg-gradient-to-r from-teal-500 to-emerald-500 text-xs font-bold text-white rounded-xl shadow-lg border border-emerald-400/20 hover:scale-[1.02] active:scale-95 transition-all"
+        {/* Empty state */}
+        {!arch && !running && !error && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="panel mt-5 flex h-[420px] flex-col items-center justify-center"
           >
-            Launch Design Blueprint
-          </button>
-        </div>
-      )}
+            <Activity size={28} style={{ color: "var(--ink-faint)" }} />
+            <div className="mt-4 font-mono text-sm" style={{ color: "var(--ink-faint)" }}>
+              <span className="cursor-blink">awaiting requirements</span>
+            </div>
+            <p className="mt-2 max-w-md text-center text-xs" style={{ color: "var(--ink-faint)" }}>
+              Paste a spec or load the sample, then run the pipeline to see a decomposed
+              service map, dependency graph, and live competitor intelligence.
+            </p>
+          </motion.div>
+        )}
+
+        {/* Results */}
+        {arch && (
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
+            {/* Summary strip */}
+            <div className="panel panel-hover mb-5 flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-4">
+              <div>
+                <span className="font-mono text-[10px]" style={{ color: "var(--ink-faint)" }}>DOMAIN</span>
+                <div className="text-sm font-semibold" style={{ color: "var(--ink)" }}>{arch.app_type}</div>
+              </div>
+              <div className="h-8 w-px" style={{ background: "var(--line)" }} />
+              <div className="flex gap-5">
+                <Stat n={arch.services.length} label="services" />
+                <Stat n={arch.edges.length} label="dependencies" />
+                <Stat n={arch.edges.filter((e) => e.type === "async").length} label="async flows" />
+                <Stat n={arch.actors.length} label="actors" />
+              </div>
+              {arch.preprocess?.compressed && (
+                <div className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5"
+                  style={{ background: "rgba(56,225,212,0.06)", border: "1px solid var(--line)" }}>
+                  <span style={{ width: 6, height: 6, borderRadius: 99, background: "var(--cyan)" }} />
+                  <span className="font-mono text-[10px]" style={{ color: "var(--ink-dim)" }}>
+                    doc compressed{" "}
+                    <span className="accent-cyan">
+                      {Math.round((1 - arch.preprocess.digest_chars / arch.preprocess.original_chars) * 100)}%
+                    </span>{" "}
+                    before LLM
+                  </span>
+                </div>
+              )}
+              <p className="ml-auto max-w-md text-xs" style={{ color: "var(--ink-dim)" }}>{arch.summary}</p>
+            </div>
+
+            {/* Map + competitor */}
+            <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.7fr_1fr]">
+              <ServiceMap arch={arch} selectedId={selectedId} onSelect={onSelect} />
+              <div className="max-h-[560px] overflow-y-auto">
+                <CompetitorPanel data={arch.competitor} />
+              </div>
+            </div>
+
+            {/* Shared concerns */}
+            <div className="panel mt-5 px-5 py-4">
+              <span className="font-mono text-[10px] tracking-wider" style={{ color: "var(--ink-faint)" }}>
+                CROSS-CUTTING CONCERNS
+              </span>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {arch.shared_concerns.map((c) => (
+                  <span key={c} className="tag">{c}</span>
+                ))}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </main>
+
+      <ServiceDrawer arch={arch ?? ({} as Architecture)} service={selectedService} onClose={() => setSelectedId(null)} />
     </div>
   );
 }
 
-export default App;
+function Stat({ n, label }: { n: number; label: string }) {
+  return (
+    <div>
+      <span className="font-mono text-lg font-bold accent-cyan">{n}</span>
+      <span className="ml-1.5 text-[11px]" style={{ color: "var(--ink-faint)" }}>{label}</span>
+    </div>
+  );
+}

@@ -1,36 +1,20 @@
 # Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-*.egg
-*.egg-info/
-dist/
-build/
-*.log
+backend/.venv/
+backend/__pycache__/
+backend/*.pyc
 
-# Backend data cache (local file DB)
-backend/data/
+# Secrets
+backend/.env
+backend/.env.*
 
-# Node / Frontend
-node_modules/
+# Node
+frontend/node_modules/
 frontend/dist/
-frontend/.vite/
 
-# Environment Variables
-.env
-.env.local
-.env.*.local
-
-# VS Code
+# IDE
 .vscode/
-*.code-workspace
+.idea/
 
-# OS Files
+# OS
 .DS_Store
 Thumbs.db
