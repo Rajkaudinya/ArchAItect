@@ -3,7 +3,8 @@ import json
 import logging
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
 from fastapi.responses import PlainTextResponse, JSONResponse
-from typing import Optional
+from pydantic import BaseModel
+from typing import Optional, List
 from app.config import settings
 from app.services.parser import DocumentParser
 from app.services.analyzer_v2 import get_analyzer
@@ -15,6 +16,16 @@ router = APIRouter()
 
 def get_analyses_file(project_id: str) -> str:
     return os.path.join(settings.DATA_DIR, f"analysis_{project_id}.json")
+
+def get_text_file(project_id: str) -> str:
+    return os.path.join(settings.DATA_DIR, f"text_{project_id}.txt")
+
+class ClarificationAnswer(BaseModel):
+    question: str
+    answer: str
+
+class ClarifyRequest(BaseModel):
+    answers: List[ClarificationAnswer]
 
 @router.post("/upload", response_model=AnalysisResult)
 async def upload_requirement_document(
@@ -106,10 +117,13 @@ async def upload_requirement_document(
             sections=sections
         )
         
-        # 3. Cache results to project
+        # 3. Cache results and raw text to project
         ans_file = get_analyses_file(project_id)
-        with open(ans_file, "w") as f:
+        with open(ans_file, "w", encoding="utf-8") as f:
             f.write(result.json())
+        # Store raw text for re-analysis on clarification submission
+        with open(get_text_file(project_id), "w", encoding="utf-8") as f:
+            f.write(requirement_text)
         
         logger.info(f"Analysis completed successfully for project {project_id}")
         logger.info(f"Generated {len(result.microservices)} microservices with {len(result.dependencies)} dependencies")
@@ -148,12 +162,12 @@ def get_latest_analysis(project_id: str):
             )
             analyzer = get_analyzer()
             result = analyzer.analyze_requirements(default_req, project_id, "srs_default.txt")
-            with open(ans_file, "w") as f:
+            with open(ans_file, "w", encoding="utf-8") as f:
                 f.write(result.json())
             return result
         raise HTTPException(status_code=404, detail="No analysis found for this project")
-        
-    with open(ans_file, "r") as f:
+
+    with open(ans_file, "r", encoding="utf-8") as f:
         return json.load(f)
 
 @router.put("/{project_id}", response_model=AnalysisResult)
@@ -162,9 +176,52 @@ def update_analysis(project_id: str, updated_result: AnalysisResult):
     Saves customized architecture configurations updated directly on the diagram canvas by the user.
     """
     ans_file = get_analyses_file(project_id)
-    with open(ans_file, "w") as f:
+    with open(ans_file, "w", encoding="utf-8") as f:
         f.write(updated_result.json())
     return updated_result
+
+
+# ============= Clarification Re-Analysis =============
+
+@router.post("/{project_id}/clarify", response_model=AnalysisResult)
+async def clarify_and_rebuild(project_id: str, body: ClarifyRequest):
+    """
+    Re-run analysis with the user's answers to clarification questions injected
+    as additional context.  The original document text is loaded from cache;
+    answers are appended so the LLM can produce a more accurate service breakdown.
+    """
+    text_file = get_text_file(project_id)
+    ans_file  = get_analyses_file(project_id)
+
+    if not os.path.exists(text_file):
+        raise HTTPException(status_code=404, detail="Original document not found. Please re-upload.")
+
+    with open(text_file, "r", encoding="utf-8") as f:
+        requirement_text = f.read()
+
+    # Load original analysis to reuse filename
+    filename = "requirements.txt"
+    if os.path.exists(ans_file):
+        with open(ans_file, "r", encoding="utf-8") as f:
+            cached = json.load(f)
+        filename = cached.get("raw_filename", filename)
+
+    answers_dicts = [{"question": a.question, "answer": a.answer} for a in body.answers]
+
+    analyzer = get_analyzer()
+    result = analyzer.analyze_requirements(
+        requirement_text,
+        project_id,
+        filename,
+        clarification_answers=answers_dicts,
+    )
+
+    # Overwrite cached analysis with the refined result
+    with open(ans_file, "w", encoding="utf-8") as f:
+        f.write(result.json())
+
+    logger.info(f"Clarification re-analysis complete for project {project_id}")
+    return result
 
 
 # ============= Export Endpoints =============
@@ -176,7 +233,7 @@ def export_markdown(project_id: str):
     if not os.path.exists(ans_file):
         raise HTTPException(status_code=404, detail="No analysis found for this project")
     
-    with open(ans_file, "r") as f:
+    with open(ans_file, "r", encoding="utf-8") as f:
         data = json.load(f)
         analysis = AnalysisResult(**data)
     
@@ -191,7 +248,7 @@ def export_mermaid(project_id: str):
     if not os.path.exists(ans_file):
         raise HTTPException(status_code=404, detail="No analysis found for this project")
     
-    with open(ans_file, "r") as f:
+    with open(ans_file, "r", encoding="utf-8") as f:
         data = json.load(f)
         analysis = AnalysisResult(**data)
     
@@ -206,7 +263,7 @@ def export_plantuml(project_id: str):
     if not os.path.exists(ans_file):
         raise HTTPException(status_code=404, detail="No analysis found for this project")
     
-    with open(ans_file, "r") as f:
+    with open(ans_file, "r", encoding="utf-8") as f:
         data = json.load(f)
         analysis = AnalysisResult(**data)
     
@@ -221,7 +278,7 @@ def export_json_schema(project_id: str):
     if not os.path.exists(ans_file):
         raise HTTPException(status_code=404, detail="No analysis found for this project")
     
-    with open(ans_file, "r") as f:
+    with open(ans_file, "r", encoding="utf-8") as f:
         data = json.load(f)
         analysis = AnalysisResult(**data)
     

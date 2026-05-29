@@ -4,7 +4,9 @@ import { FileUpload } from './components/FileUpload';
 import { GraphCanvas } from './components/GraphCanvas';
 import { MetricsGrid } from './components/MetricsGrid';
 import { TraceabilityTable } from './components/TraceabilityTable';
-import { LayoutGrid, Layers, RefreshCw, FolderPlus, FolderOpen, Heart, Eye, ArrowRight, Trash2 } from 'lucide-react';
+import { FlowDiagram } from './components/FlowDiagram';
+import { ClarificationPanel } from './components/ClarificationPanel';
+import { RefreshCw, FolderPlus, FolderOpen, Trash2 } from 'lucide-react';
 
 function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -14,6 +16,7 @@ function App() {
   const [newProjectName, setNewProjectName] = useState("");
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isClarifying, setIsClarifying] = useState(false);
 
   // Fetch initial list of projects
   useEffect(() => {
@@ -96,6 +99,29 @@ function App() {
     } catch (err) {
       console.error(err);
       alert("Failed to delete project.");
+    }
+  };
+
+  const handleClarificationSubmit = async (answers: { question: string; answer: string }[]) => {
+    if (!currentProject) return;
+    setIsClarifying(true);
+    try {
+      const res = await fetch(`http://localhost:8000/api/v1/analysis/${currentProject.id}/clarify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answers }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAnalysisResult(data);
+      } else {
+        alert("Clarification re-analysis failed. Make sure the backend is running.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Network error during clarification re-analysis.");
+    } finally {
+      setIsClarifying(false);
     }
   };
 
@@ -302,6 +328,16 @@ function App() {
           {/* Metrics Dashboard Monitoring Grid */}
           {analysisResult && (
             <div className="space-y-6">
+              {/* High-level user journey (Stage 1→4 bridge) */}
+              <FlowDiagram mermaid={analysisResult.analysis_metadata?.flow_diagram as string ?? ''} />
+
+              {/* Clarification questions — surface before finalising architecture */}
+              <ClarificationPanel
+                questions={(analysisResult.analysis_metadata?.clarifications ?? []) as any}
+                onSubmitAnswers={handleClarificationSubmit}
+                isProcessing={isClarifying}
+              />
+
               <MetricsGrid metrics={analysisResult.metrics} />
               
               {/* Draggable Topology Graph and Custom Inspector */}
@@ -334,7 +370,10 @@ function App() {
                     {analysisResult.analysis_metadata?.traceability?.length ?? 0} SERVICES TRACED
                   </span>
                 </div>
-                <TraceabilityTable rows={analysisResult.analysis_metadata?.traceability ?? []} />
+                <TraceabilityTable
+                  rows={analysisResult.analysis_metadata?.traceability ?? []}
+                  impactMap={(analysisResult.analysis_metadata?.impact_map ?? {}) as Record<string, string[]>}
+                />
               </div>
             </div>
           )}

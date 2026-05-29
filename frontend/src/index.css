@@ -55,3 +55,37 @@
 .glow-line {
   animation: pulseGlow 3s infinite ease-in-out;
 }
+
+/* Mermaid diagram dark-theme overrides */
+.mermaid-output svg {
+  max-width: 100%;
+  height: auto;
+  background: transparent !important;
+}
+.mermaid-output .node rect,
+.mermaid-output .node circle,
+.mermaid-output .node ellipse,
+.mermaid-output .node polygon {
+  fill: #1e293b !important;
+  stroke: #4ade80 !important;
+  stroke-width: 1.5px !important;
+}
+.mermaid-output .node .label {
+  color: #e2e8f0 !important;
+  fill: #e2e8f0 !important;
+}
+.mermaid-output .edgePath .path {
+  stroke: #64748b !important;
+  stroke-width: 1.5px !important;
+}
+.mermaid-output .edgeLabel {
+  background: #1e293b !important;
+  color: #94a3b8 !important;
+}
+.mermaid-output .cluster rect {
+  fill: #0f172a !important;
+  stroke: #334155 !important;
+}
+.mermaid-output text {
+  fill: #e2e8f0 !important;
+}

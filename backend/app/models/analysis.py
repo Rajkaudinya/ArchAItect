@@ -11,6 +11,7 @@ class ApiEndpoint(BaseModel):
     path: str
     method: str
     description: str
+    inferred: bool = False  # True when not traceable to a document action verb
     request_payload: Optional[Dict[str, Any]] = None
     response_payload: Optional[Dict[str, Any]] = None
 
@@ -21,6 +22,9 @@ class MicroserviceSchema(BaseModel):
     domain: str
     database: str
     database_reasoning: str
+    boundary_justification: str = ""
+    inferred: bool = False          # True when < 2 FR-IDs justify this service
+    justified_fr_ids: List[str] = []  # FR-IDs that directly justify this boundary
     apis: List[ApiEndpoint] = []
     scaling_recommendations: List[str] = []
     metadata: Optional[Dict[str, Any]] = {}
