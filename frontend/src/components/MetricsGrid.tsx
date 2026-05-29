@@ -1,6 +1,6 @@
 import React from 'react';
 import { MetricScores } from '../types';
-import { Shield, GitMerge, Activity, Zap } from 'lucide-react';
+import { Shield, GitMerge, Activity, Zap, Target } from 'lucide-react';
 
 interface MetricsGridProps {
   metrics: MetricScores;
@@ -55,11 +55,20 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ metrics }) => {
       textColor: 'text-rose-400',
       desc: 'Containment level of failures using circuit-breakers, queues, and async boundary safeguards.',
       rating: getRating(metrics.fault_isolation, 'other')
+    },
+    {
+      name: 'Cohesion Score',
+      score: metrics.cohesion ?? 70,
+      icon: Target,
+      color: 'from-cyan-500 to-blue-500',
+      textColor: 'text-cyan-400',
+      desc: 'How tightly related functional requirements are within each service boundary.',
+      rating: getRating(metrics.cohesion ?? 70, 'other')
     }
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
       {cards.map((card) => {
         const Icon = card.icon;
         return (

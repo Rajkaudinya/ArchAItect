@@ -2,99 +2,251 @@
 Advanced AI-Powered Microservice Architecture Analyzer
 Uses NLP, entity recognition, semantic clustering, and dependency analysis
 """
+import os
 import re
 import json
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Set
 from collections import defaultdict
 from app.models.analysis import (
-    AnalysisResult, MicroserviceSchema, ApiEndpoint, 
+    AnalysisResult, MicroserviceSchema, ApiEndpoint,
     DependencyInfo, MetricScores, MetricFactor, MetricBreakdown
 )
 from app.services.nlp_engine import NLPEngine
+from app.services.clarification_engine import ClarificationEngine
+
+try:
+    from groq import Groq as _Groq
+    _groq_client = _Groq(api_key=os.getenv("GROQ_API_KEY", ""))
+except Exception:
+    _groq_client = None
+
+# ── The exactly-6 canonical microservices every analysis produces ─────────────
+CANONICAL_SERVICES = [
+    {
+        "id": "user-service",
+        "name": "User Service",
+        "domain": "User & Authentication",
+        "keywords": ["user", "auth", "login", "register", "signup", "password",
+                     "profile", "account", "session", "credential", "role", "permission"],
+        "database": "PostgreSQL",
+        "database_reasoning": "ACID transactions ensure credential integrity; read replicas handle high-volume profile queries.",
+        "scaling": [
+            "Horizontal scaling with stateless JWT — no sticky sessions needed",
+            "Redis cache for token blacklisting and rate-limit counters",
+            "Read replicas for user-profile lookups"
+        ],
+        "default_apis": [
+            ("POST", "/api/v1/auth/register",     "Register a new user account"),
+            ("POST", "/api/v1/auth/login",         "Authenticate and issue JWT token"),
+            ("POST", "/api/v1/auth/refresh",       "Refresh an expired JWT token"),
+            ("POST", "/api/v1/auth/logout",        "Invalidate token and end session"),
+            ("GET",  "/api/v1/users/{id}/profile", "Fetch authenticated user profile"),
+            ("PUT",  "/api/v1/users/{id}/profile", "Update user profile details"),
+        ],
+    },
+    {
+        "id": "product-service",
+        "name": "Product Service",
+        "domain": "Product & Catalog",
+        "keywords": ["product", "catalog", "inventory", "stock", "item", "sku",
+                     "category", "search", "browse", "listing", "warehouse"],
+        "database": "MongoDB",
+        "database_reasoning": "Flexible document model accommodates diverse product attributes; Atlas Search enables full-text catalog queries.",
+        "scaling": [
+            "CDN caching for product images and catalog pages",
+            "ElasticSearch index for fast full-text and faceted search",
+            "Distributed locking (Redis) for inventory reservation to avoid overselling"
+        ],
+        "default_apis": [
+            ("GET",  "/api/v1/products",           "List products with filters and pagination"),
+            ("POST", "/api/v1/products",           "Create a new product listing (admin)"),
+            ("GET",  "/api/v1/products/{id}",      "Get detailed product information"),
+            ("PUT",  "/api/v1/products/{id}",      "Update product details or pricing"),
+            ("GET",  "/api/v1/products/search",    "Full-text search across catalog"),
+            ("POST", "/api/v1/inventory/reserve",  "Reserve stock units for an order"),
+        ],
+    },
+    {
+        "id": "cart-service",
+        "name": "Cart Service",
+        "domain": "Cart & Checkout",
+        "keywords": ["cart", "basket", "checkout", "add", "remove", "wishlist",
+                     "shopping", "coupon", "discount", "promo"],
+        "database": "Redis",
+        "database_reasoning": "Sub-millisecond in-memory reads; TTL-based auto-expiry handles abandoned carts without a cleanup job.",
+        "scaling": [
+            "Redis Cluster for distributed, low-latency cart state",
+            "Session-affinity routing to reduce cross-node cache misses",
+            "Async checkout event published to Order Service via message queue"
+        ],
+        "default_apis": [
+            ("GET",  "/api/v1/cart",               "Get current user's cart contents"),
+            ("POST", "/api/v1/cart/items",         "Add a product to the cart"),
+            ("PUT",  "/api/v1/cart/items/{id}",    "Update item quantity in cart"),
+            ("DELETE", "/api/v1/cart/items/{id}",  "Remove item from cart"),
+            ("POST", "/api/v1/cart/checkout",      "Initiate checkout and create order"),
+            ("DELETE", "/api/v1/cart",             "Clear entire cart (after order placed)"),
+        ],
+    },
+    {
+        "id": "order-service",
+        "name": "Order Service",
+        "domain": "Order Management",
+        "keywords": ["order", "fulfillment", "tracking", "status", "purchase",
+                     "place", "shipment", "delivery", "cancel", "confirm"],
+        "database": "PostgreSQL",
+        "database_reasoning": "ACID guarantees atomic order-state transitions; append-only event log enables full order history.",
+        "scaling": [
+            "Event sourcing + CQRS separates write (commands) from read (queries)",
+            "Saga pattern coordinates multi-step checkout (stock → payment → ship)",
+            "Kafka topic per order-lifecycle event for downstream consumers"
+        ],
+        "default_apis": [
+            ("POST", "/api/v1/orders",             "Place a new customer order"),
+            ("GET",  "/api/v1/orders",             "List user's orders with filters"),
+            ("GET",  "/api/v1/orders/{id}",        "Get order details and current status"),
+            ("PUT",  "/api/v1/orders/{id}/cancel", "Cancel order and trigger refund"),
+            ("GET",  "/api/v1/orders/{id}/track",  "Real-time order tracking info"),
+            ("PUT",  "/api/v1/orders/{id}/status", "Update order status (internal)"),
+        ],
+    },
+    {
+        "id": "payment-service",
+        "name": "Payment Service",
+        "domain": "Payment & Billing",
+        "keywords": ["payment", "pay", "billing", "invoice", "refund", "transaction",
+                     "stripe", "paypal", "charge", "gateway", "card"],
+        "database": "PostgreSQL",
+        "database_reasoning": "Financial ledger demands strict ACID; immutable append-only audit trail for regulatory compliance.",
+        "scaling": [
+            "Idempotency keys on every charge call — safe to retry on network failure",
+            "Circuit breaker (Resilience4j) isolates gateway outages from order flow",
+            "PCI-DSS tokenisation — raw card data never stored on our servers"
+        ],
+        "default_apis": [
+            ("POST", "/api/v1/payments/charge",         "Process payment for an order"),
+            ("POST", "/api/v1/payments/refund",         "Initiate a full or partial refund"),
+            ("GET",  "/api/v1/payments/{id}/status",    "Check payment transaction status"),
+            ("GET",  "/api/v1/invoices",                "List customer billing invoices"),
+            ("GET",  "/api/v1/invoices/{id}",           "Download a specific invoice PDF"),
+            ("POST", "/api/v1/payments/webhook",        "Receive payment gateway callbacks"),
+        ],
+    },
+    {
+        "id": "notification-service",
+        "name": "Notification Service",
+        "domain": "Notification & Communication",
+        "keywords": ["notification", "email", "sms", "push", "notify", "alert",
+                     "message", "send", "template", "reminder", "receipt"],
+        "database": "Redis",
+        "database_reasoning": "Message queue state in Redis for pub/sub throughput; MongoDB for durable template storage.",
+        "scaling": [
+            "RabbitMQ/Kafka topic per channel (email, SMS, push) — independent scaling",
+            "Dead-letter queue + exponential back-off retry for failed deliveries",
+            "Horizontal worker pool scaled by queue depth via KEDA"
+        ],
+        "default_apis": [
+            ("POST", "/api/v1/notifications/send",          "Enqueue a notification for delivery"),
+            ("GET",  "/api/v1/notifications/{id}/status",   "Check notification delivery status"),
+            ("GET",  "/api/v1/notifications/templates",     "List available message templates"),
+            ("POST", "/api/v1/notifications/templates",     "Create or update a template"),
+            ("GET",  "/api/v1/notifications/history",       "User's notification history"),
+        ],
+    },
+]
+
+# Canonical dependency rules (always present, refined from document context)
+CANONICAL_DEPENDENCIES = [
+    ("cart-service",         "product-service",      "sync",  "Validates product existence and stock before adding to cart"),
+    ("cart-service",         "user-service",         "sync",  "Associates cart with authenticated user session"),
+    ("order-service",        "cart-service",         "sync",  "Reads cart contents to create order line-items"),
+    ("order-service",        "product-service",      "sync",  "Reserves inventory units when order is confirmed"),
+    ("order-service",        "payment-service",      "sync",  "Triggers payment charge during checkout"),
+    ("order-service",        "notification-service", "async", "Publishes order-confirmed event → sends confirmation email/SMS"),
+    ("payment-service",      "notification-service", "async", "Publishes payment-result event → sends receipt or failure alert"),
+    ("user-service",         "notification-service", "async", "Publishes account events → sends welcome email, password-reset link"),
+]
 
 class RequirementAnalyzer:
     def __init__(self):
         self.nlp_engine = NLPEngine()
         
-    def analyze_requirements(self, text: str, project_id: str, filename: str, 
-                           sections: Optional[Dict[str, str]] = None) -> AnalysisResult:
+    def analyze_requirements(
+        self,
+        text: str,
+        project_id: str,
+        filename: str,
+        sections: Optional[Dict[str, str]] = None,
+        clarification_answers: Optional[List[Dict]] = None,
+    ) -> AnalysisResult:
         """
-        Advanced AI-powered analysis of requirements using NLP and semantic understanding.
-        
-        Process:
-        1. Extract entities, actions, and concepts using NLP
-        2. Identify service domains using semantic similarity
-        3. Generate API endpoints based on actions and entities
-        4. Extract dependencies through co-occurrence analysis
-        5. Calculate quality metrics (coupling, cohesion, etc.)
+        Analyze requirements and always produce exactly the 6 canonical microservices.
+        Groq LLM populates each service with document-specific descriptions and APIs.
+        Clarification answers (if provided) are appended as extra context before
+        the LLM call so re-analysis reflects user input.
         """
         print(f"[ANALYSIS] Analyzing requirements document: {filename}")
-        
-        # Step 1: Entity and concept extraction
-        print("[Step 1] Extracting entities and concepts...")
-        extraction = self.nlp_engine.extract_entities_and_actions(text)
-        entities = extraction.get("entities", [])
-        actions = extraction.get("actions", [])
-        concepts = extraction.get("concepts", [])
-        
-        print(f"   Found: {len(entities)} entities, {len(actions)} actions, {len(concepts)} concepts")
-        
-        # Step 2: Identify service domains
-        print("Step 2: Identifying microservice domains...")
-        detected_domains = self.nlp_engine.identify_service_domains(text, sections)
-        
-        # Strategic domain selection: Target 5-6 services (DDD optimal range)
-        # Take top domains with meaningful confidence (>20) but cap at 6
-        significant_domains = [d for d in detected_domains if d[1] > 20][:6]
-        
-        # Fallback: If too few domains detected, take top 3-5 based on available data
-        if len(significant_domains) < 3:
-            significant_domains = detected_domains[:max(3, min(5, len(detected_domains)))]
-            
-        print(f"   Detected {len(significant_domains)} microservice domains (optimal: 5-6)")
-        
-        # Step 3: Build microservices
-        print("[Step 3] Generating microservice schemas...")
-        services = []
-        
-        for domain_name, confidence, matched_keywords in significant_domains:
-            service = self._build_microservice_schema(
-                domain_name, 
-                matched_keywords, 
-                text, 
-                actions, 
-                entities,
-                concepts
-            )
-            if service:
-                services.append(service)
-                
-        print(f"   Generated {len(services)} microservices")
-        
-        # Step 4: Extract dependencies
-        print("[Step 4] Analyzing service dependencies...")
-        service_dicts = [
-            {
-                "name": s.id,
-                "keywords": matched_keywords
-            }
-            for s, (_, _, matched_keywords) in zip(services, significant_domains)
-        ]
-        
-        dependencies = self._extract_dependencies(service_dicts, text, services)
-        print(f"   Identified {len(dependencies)} dependencies")
-        
-        # Step 5: Calculate metrics with statistical breakdown
-        print("Step 5: Computing architecture quality metrics with statistical analysis...")
-        metrics, metrics_breakdown = self._calculate_metrics_with_breakdown(services, dependencies, text)
 
-        # Step 6: Build traceability matrix
-        print("Step 6: Building requirements traceability matrix...")
-        traceability = self._build_traceability(text, services, significant_domains)
-        
-        # Generate content preview
-        preview = text[:500] + "..." if len(text) > 500 else text
-        
+        # Append clarification answers as extra context so LLM sees them
+        enriched_text = text
+        if clarification_answers:
+            notes = "\n\n=== CLARIFICATION ANSWERS ===\n"
+            for qa in clarification_answers:
+                q = qa.get("question", "")
+                a = qa.get("answer", "").strip()
+                if a:
+                    notes += f"Q: {q}\nA: {a}\n\n"
+            enriched_text = text + notes
+            print(f"   Appended {len(clarification_answers)} clarification answers to context")
+
+        # Step 1: NLP extraction — actors, capabilities, entities, FR-IDs
+        print("[Step 1] NLP extraction...")
+        extraction = self.nlp_engine.extract_entities_and_actions(enriched_text)
+        entities   = extraction.get("entities", [])
+        actions    = extraction.get("actions", [])
+        fr_ids     = self.nlp_engine.extract_fr_ids(enriched_text)
+        actors     = self.nlp_engine.extract_actors(enriched_text)
+        capabilities = self.nlp_engine.extract_capabilities(enriched_text)
+        print(f"   {len(actors)} actors, {len(capabilities)} capabilities, {len(fr_ids)} FR-IDs")
+
+        # Step 2: Build exactly 6 canonical services (LLM-enriched)
+        print("[Step 2] Building 6 canonical microservices via LLM...")
+        services = self._build_six_canonical_services(enriched_text, actors, capabilities, entities)
+        print(f"   {len(services)} services built")
+
+        # Step 3: Clarification questions (surface ambiguities for the user)
+        print("[Step 3] Detecting clarification questions...")
+        domain_tuples = [(t["domain"], 80.0, t["keywords"], "") for t in CANONICAL_SERVICES]
+        clarifications = ClarificationEngine().detect_ambiguities(
+            enriched_text, entities, actors, capabilities, fr_ids, domain_tuples
+        )
+        print(f"   {len(clarifications)} clarifications")
+
+        # Step 4: Flow diagram
+        print("[Step 4] Generating user-journey flow diagram...")
+        flow_diagram = self._generate_llm_flow_diagram(actors, capabilities, entities, domain_tuples, enriched_text)
+
+        # Step 5: Canonical dependencies (filtered by document presence)
+        print("[Step 5] Building canonical service dependencies...")
+        dependencies = self._build_canonical_dependencies(enriched_text)
+        print(f"   {len(dependencies)} dependencies")
+
+        # Step 6: FR-ID assignment and impact map
+        svc_fr_ids = self._assign_fr_ids_to_canonical(services, fr_ids, enriched_text)
+        impact_map = self._compute_impact_map(svc_fr_ids)
+
+        # Step 7: Metrics with statistical breakdown
+        print("[Step 7] Computing architecture quality metrics with statistical analysis...")
+        metrics, metrics_breakdown = self._calculate_metrics_with_breakdown(
+            services, dependencies, enriched_text, svc_fr_ids, fr_ids
+        )
+
+        # Step 8: Traceability matrix
+        print("[Step 8] Building requirements traceability matrix...")
+        traceability = self._build_traceability_canonical(enriched_text, services, fr_ids)
+
+        preview = enriched_text[:500] + "..." if len(enriched_text) > 500 else enriched_text
+
         result = AnalysisResult(
             project_id=project_id,
             raw_filename=filename,
@@ -109,24 +261,409 @@ class RequirementAnalyzer:
                 "total_dependencies": len(dependencies),
                 "entities_found": len(entities),
                 "actions_found": len(actions),
-                "concepts_found": len(concepts),
                 "sections_analyzed": len(sections) if sections else 0,
                 "nlp_enabled": self.nlp_engine.initialized,
-                "traceability": traceability
-            }
+                "traceability": traceability,
+                "fr_ids": fr_ids,
+                "actors": actors,
+                "capabilities": capabilities[:20],
+                "impact_map": impact_map,
+                "clarifications": clarifications,
+                "flow_diagram": flow_diagram,
+            },
         )
-        
         print("[COMPLETE] Analysis complete!")
         return result
-        
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Canonical-6 service builders
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _build_six_canonical_services(
+        self,
+        text: str,
+        actors: List[Dict],
+        capabilities: List[Dict],
+        entities: List[str],
+    ) -> List[MicroserviceSchema]:
+        """
+        Always produces exactly the 6 canonical microservices.
+        Groq LLM enriches each service with document-specific descriptions and APIs.
+        Falls back to template content if LLM is unavailable.
+        """
+        # Summarise actors and capabilities for the LLM prompt
+        actor_lines = []
+        for a in actors[:6]:
+            caps = [c for c in a.get("capabilities", [])[:4] if c]
+            actor_lines.append(f"  {a['actor'].capitalize()}: {', '.join(caps) or '(general)'}")
+
+        cap_sample = [c["capability"] for c in capabilities[:15] if c.get("capability")]
+
+        doc_excerpt = text[:2500]
+
+        system_msg = (
+            "You are a senior software architect. You output ONLY valid JSON — "
+            "no prose, no markdown fences, no explanation."
+        )
+
+        user_msg = f"""Given the requirements document below, populate the 6 microservices.
+
+DOCUMENT (excerpt):
+{doc_excerpt}
+
+ACTORS DETECTED: {'; '.join(actor_lines) or 'User, Admin, System'}
+KEY CAPABILITIES: {', '.join(cap_sample) or 'register, login, browse, order, pay, notify'}
+
+Return ONLY this JSON (no other text):
+{{
+  "services": [
+    {{
+      "id": "user-service",
+      "description": "<1-2 sentences specific to THIS document — mention concrete feature names>",
+      "apis": [
+        {{"path": "/api/v1/...", "method": "POST|GET|PUT|DELETE", "description": "<action>"}},
+        ...  (3-5 entries grounded in the document requirements)
+      ]
+    }},
+    {{
+      "id": "product-service",
+      "description": "...",
+      "apis": [...]
+    }},
+    {{
+      "id": "cart-service",
+      "description": "...",
+      "apis": [...]
+    }},
+    {{
+      "id": "order-service",
+      "description": "...",
+      "apis": [...]
+    }},
+    {{
+      "id": "payment-service",
+      "description": "...",
+      "apis": [...]
+    }},
+    {{
+      "id": "notification-service",
+      "description": "...",
+      "apis": [...]
+    }}
+  ]
+}}"""
+
+        llm_data: Dict[str, Any] = {}
+        try:
+            if _groq_client is None:
+                raise RuntimeError("Groq client unavailable")
+            resp = _groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user",   "content": user_msg},
+                ],
+                temperature=0.1,
+                max_tokens=2000,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # Strip accidental fences
+            raw = re.sub(r"^```(?:json)?\s*\n?", "", raw, flags=re.MULTILINE)
+            raw = re.sub(r"\n?```\s*$", "", raw, flags=re.MULTILINE)
+            llm_data = json.loads(raw)
+            print("   LLM service descriptions generated OK")
+        except Exception as exc:
+            print(f"   LLM enrichment failed ({exc}) — using templates")
+
+        # Map LLM output by service id
+        llm_by_id: Dict[str, Dict] = {}
+        for svc in llm_data.get("services", []):
+            llm_by_id[svc.get("id", "")] = svc
+
+        services: List[MicroserviceSchema] = []
+        text_lower = text.lower()
+
+        for tmpl in CANONICAL_SERVICES:
+            sid = tmpl["id"]
+            llm_svc = llm_by_id.get(sid, {})
+
+            # Description: LLM if available, else template
+            description = llm_svc.get("description") or \
+                f"Handles all {tmpl['domain']} operations for the system."
+
+            # APIs: merge LLM-provided + template defaults
+            apis: List[ApiEndpoint] = []
+            seen_paths: Set[str] = set()
+
+            # LLM-grounded endpoints first (inferred=False)
+            for ep in llm_svc.get("apis", [])[:5]:
+                path = ep.get("path", "")
+                method = ep.get("method", "GET").upper()
+                desc = ep.get("description", "")
+                if path and path not in seen_paths:
+                    seen_paths.add(path)
+                    apis.append(ApiEndpoint(path=path, method=method, description=desc, inferred=False))
+
+            # Fill with template defaults (inferred=True) up to 6 total
+            for method, path, desc in tmpl["default_apis"]:
+                if path not in seen_paths and len(apis) < 6:
+                    seen_paths.add(path)
+                    apis.append(ApiEndpoint(path=path, method=method, description=desc, inferred=True))
+
+            # Keyword match confidence from document
+            matched_kws = [kw for kw in tmpl["keywords"] if kw in text_lower]
+            confidence = min(100.0, len(matched_kws) * 12.0 + 20.0)
+
+            services.append(MicroserviceSchema(
+                id=sid,
+                name=tmpl["name"],
+                description=description,
+                domain=tmpl["domain"],
+                database=tmpl["database"],
+                database_reasoning=tmpl["database_reasoning"],
+                boundary_justification=(
+                    f"{tmpl['name']} owns a distinct bounded context "
+                    f"({', '.join(matched_kws[:4]) or tmpl['domain'].lower()}). "
+                    "Isolated deployment boundary prevents cascading failures."
+                ),
+                inferred=confidence < 32,   # flagged if domain barely mentioned
+                justified_fr_ids=[],
+                apis=apis,
+                scaling_recommendations=tmpl["scaling"],
+                metadata={
+                    "confidence": round(confidence, 1),
+                    "matched_keywords": matched_kws[:8],
+                },
+            ))
+
+        return services
+
+    def _build_canonical_dependencies(self, text: str) -> List[DependencyInfo]:
+        """Return canonical inter-service dependencies that are relevant to this document.
+        Now requires keywords from BOTH source AND target services to be present."""
+        text_lower = text.lower()
+        deps: List[DependencyInfo] = []
+        for source, target, dep_type, desc in CANONICAL_DEPENDENCIES:
+            # Include dep ONLY if keywords from BOTH services appear in text
+            src_tmpl = next(t for t in CANONICAL_SERVICES if t["id"] == source)
+            tgt_tmpl = next(t for t in CANONICAL_SERVICES if t["id"] == target)
+            src_present = any(kw in text_lower for kw in src_tmpl["keywords"][:4])
+            tgt_present = any(kw in text_lower for kw in tgt_tmpl["keywords"][:4])
+            if src_present and tgt_present:
+                deps.append(DependencyInfo(source=source, target=target, type=dep_type, description=desc))
+        return deps
+
+    def _assign_fr_ids_to_canonical(
+        self,
+        services: List[MicroserviceSchema],
+        fr_ids: Dict[str, List[Dict]],
+        text: str,
+    ) -> Dict[str, Set[str]]:
+        """Map FR-IDs to canonical services by keyword overlap."""
+        svc_fr: Dict[str, Set[str]] = {s.id: set() for s in services}
+        tmpl_map = {t["id"]: t["keywords"] for t in CANONICAL_SERVICES}
+        for fr_id, occ_list in fr_ids.items():
+            for occ in occ_list:
+                sent = occ.get("sentence", "").lower()
+                for svc in services:
+                    kws = tmpl_map.get(svc.id, [])
+                    if any(kw in sent for kw in kws):
+                        svc_fr[svc.id].add(fr_id)
+        # Stamp services
+        for svc in services:
+            svc.justified_fr_ids = sorted(svc_fr[svc.id])
+            if fr_ids and len(svc.justified_fr_ids) < 1:
+                svc.inferred = True
+        return svc_fr
+
+    def _build_traceability_canonical(
+        self,
+        text: str,
+        services: List[MicroserviceSchema],
+        fr_ids: Dict[str, List[Dict]],
+    ) -> List[Dict]:
+        """Build traceability matrix for canonical services."""
+        fr_by_sentence: Dict[str, List[str]] = {}
+        for fr_id, occs in fr_ids.items():
+            for occ in occs:
+                fr_by_sentence.setdefault(occ["sentence"], []).append(fr_id)
+
+        lines = text.split("\n")
+        total_lines = sum(1 for line in lines if len(line.strip()) > 20)
+        matrix = []
+        tmpl_map = {t["id"]: t for t in CANONICAL_SERVICES}
+
+        for svc in services:
+            tmpl = tmpl_map.get(svc.id, {})
+            kws = tmpl.get("keywords", [])
+            relevant = []
+            seen: Set[str] = set()
+            matched_line_count = 0
+            for line_num, line in enumerate(lines, 1):
+                line_strip = line.strip()
+                if len(line_strip) <= 20:
+                    continue
+                if any(kw in line_strip.lower() for kw in kws):
+                    matched_line_count += 1
+                    display = line_strip[:160]
+                    if display not in seen and len(relevant) < 4:
+                        seen.add(display)
+                        relevant.append({
+                            "text": display,
+                            "line": line_num,
+                            "fr_ids": fr_by_sentence.get(line_strip, []),
+                        })
+            
+            # Improved confidence calculation
+            # Factor 1: Document coverage (0-40 points)
+            coverage_score = min(40, (matched_line_count / max(1, total_lines)) * 400) if total_lines > 0 else 0
+            
+            # Factor 2: FR-ID support (0-30 points)
+            fr_id_score = min(30, len(svc.justified_fr_ids) * 10)
+            
+            # Factor 3: Keyword match count (0-30 points)
+            matched_kws_count = len((svc.metadata or {}).get("matched_keywords", []))
+            keyword_score = min(30, matched_kws_count * 5)
+            
+            conf = min(100.0, coverage_score + fr_id_score + keyword_score)
+            matrix.append({
+                "service_id": svc.id,
+                "service_name": svc.name,
+                "domain": svc.domain,
+                "confidence": conf,
+                "matched_keywords": (svc.metadata or {}).get("matched_keywords", kws[:6]),
+                "requirement_sentences": relevant,
+                "boundary_justification": svc.boundary_justification,
+                "justified_fr_ids": svc.justified_fr_ids,
+                "inferred": svc.inferred,
+            })
+        return matrix
+
+    def _generate_llm_flow_diagram(
+        self,
+        actors: List[Dict],
+        capabilities: List[Dict],
+        entities: List[str],
+        domains: List[Tuple],
+        full_text: str,
+    ) -> str:
+        """
+        Use Groq LLM to generate a semantically correct, DDD-aligned Mermaid flowchart
+        of the user journey.  The LLM receives the actual document text as primary
+        context (not just noisy NLP extractions) so it can reason about actors, their
+        roles, and the correct business flow order itself.
+
+        Falls back to the NLP-heuristic method when Groq is unavailable.
+        """
+        # ── Build actor summary (used as a hint, not the primary source) ────
+        actor_summary_lines: List[str] = []
+        for a in actors[:8]:
+            caps = [c for c in a.get("capabilities", [])[:5] if c]
+            if caps:
+                actor_summary_lines.append(f"  • {a['actor'].capitalize()}: {', '.join(caps)}")
+            else:
+                actor_summary_lines.append(f"  • {a['actor'].capitalize()}")
+        actor_hint = "\n".join(actor_summary_lines) if actor_summary_lines else "  • User (inferred)"
+
+        # ── Domain names → bounded context subgraph hints ────────────────────
+        domain_names = [d[0] for d in domains[:10]]
+        domain_hint = ", ".join(domain_names) if domain_names else "Order, Payment, Notification"
+
+        # ── Pass as much document text as the context window allows ─────────
+        # Groq llama3-8b supports 8 k tokens; 3 000 chars ≈ ~750 tokens — safe limit
+        doc_text = full_text[:3000]
+
+        system_msg = (
+            "You are a senior software architect expert in Domain-Driven Design (DDD) "
+            "and microservice architecture. You produce clean, syntactically valid Mermaid "
+            "flowcharts. You output ONLY the raw Mermaid diagram — no prose, no code fences."
+        )
+
+        user_msg = f"""TASK: Generate a Mermaid `flowchart TD` that shows the complete, semantically correct HIGH-LEVEL USER JOURNEY for the system described in the requirements document below.
+
+═══════════════════════════════════════
+REQUIREMENTS DOCUMENT (excerpt):
+═══════════════════════════════════════
+{doc_text}
+
+═══════════════════════════════════════
+HINTS (extracted by NLP — use only as guidance, the document text is authoritative):
+Actors detected:
+{actor_hint}
+
+DDD Bounded Contexts detected:
+{domain_hint}
+═══════════════════════════════════════
+
+STRICT RULES — follow every one:
+1.  Start with `flowchart TD` (top-down).
+2.  Only include actors that ACTUALLY PARTICIPATE in the flow. If an actor initiates the journey, show it as a stadium/rounded shape: `ActorID([Actor Name])`. DO NOT show actors that are not connected to any steps.
+3.  Use SUBGRAPHS to group steps by DDD bounded context:
+      subgraph PaymentService["Payment & Billing"]
+        ...
+      end
+4.  Show the COMPLETE HAPPY PATH in document order:
+    - Registration / Login → Browse / Search → Select / Add to Cart →
+      Checkout → Payment → Order Confirmation → Fulfillment / Shipping →
+      Delivery → Notification  (adapt to what the document actually describes).
+5.  Add DECISION DIAMONDS ({{...}}) for key branching points:
+    - Authentication check, Stock availability, Payment success/failure,
+      any business rule that produces two outcomes.
+6.  Show at least ONE ERROR / FAILURE path per decision (retry, cancel, error page).
+7.  System-triggered async steps (emails, notifications, webhooks) use dashed arrows: `-->|async|`.
+8.  Each node ID must be a simple alphanumeric token (no spaces, no special chars).
+9.  Labels must be human-readable business language — NOT class names or method names.
+10. Maximum 30 nodes total. Every subgraph must have at least 2 nodes.
+11. Output ONLY the raw Mermaid syntax. No explanation. No ```mermaid fences. No prose.
+
+Generate the diagram now:"""
+
+        try:
+            if _groq_client is None:
+                raise RuntimeError("Groq client not available")
+
+            response = _groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user",   "content": user_msg},
+                ],
+                temperature=0.15,   # low temperature → more deterministic, structurally correct output
+                max_tokens=1800,
+            )
+            raw = response.choices[0].message.content.strip()
+
+            # ── Strip accidental markdown fences ─────────────────────────────
+            raw = re.sub(r"^```(?:mermaid)?\s*\n?", "", raw, flags=re.MULTILINE)
+            raw = re.sub(r"\n?```\s*$", "", raw, flags=re.MULTILINE)
+            raw = raw.strip()
+
+            # ── Validate: must begin with a Mermaid chart declaration ────────
+            if re.match(r"^(flowchart|graph)\s+", raw, re.IGNORECASE):
+                # Basic structural sanity: must have at least 3 arrows
+                if raw.count("-->") >= 3:
+                    print("   ✅ LLM flow diagram generated via Groq")
+                    return raw
+                else:
+                    print("   ⚠️  LLM diagram is too sparse — retrying with fallback")
+            else:
+                print("   ⚠️  LLM returned non-Mermaid output — falling back to NLP method")
+
+        except Exception as e:
+            print(f"   ⚠️  Groq flow generation failed ({e}) — falling back to NLP method")
+
+        # ── Fallback: NLP-heuristic generation ───────────────────────────────
+        return self.nlp_engine.extract_user_flows(full_text, actors, capabilities)
+
     def _build_microservice_schema(
-        self, 
-        domain_name: str, 
+        self,
+        domain_name: str,
         keywords: List[str],
         text: str,
         actions: List[str],
         entities: List[str],
-        concepts: List[str]
+        concepts: List[str],
+        boundary_justification: str = "",
     ) -> MicroserviceSchema:
         """Build a complete microservice schema with APIs, database, and recommendations"""
         
@@ -139,8 +676,11 @@ class RequirementAnalyzer:
         # Suggest database type
         db_type, db_reason = self.nlp_engine.suggest_database_type(domain_name, keywords)
         
-        # Generate API endpoints
-        apis = self._generate_api_endpoints(domain_name, keywords, actions, entities)
+        # Extract action verbs from document text near this domain's keywords
+        doc_verbs = self.nlp_engine.extract_domain_action_verbs(text, keywords)
+
+        # Generate API endpoints — document verbs take priority over templates
+        apis = self._generate_api_endpoints(domain_name, keywords, actions, entities, doc_verbs)
         
         # Generate scaling recommendations
         scaling_recs = self._generate_scaling_recommendations(domain_name, keywords)
@@ -155,6 +695,7 @@ class RequirementAnalyzer:
             domain=domain_name,
             database=db_type,
             database_reasoning=db_reason,
+            boundary_justification=boundary_justification,
             apis=apis,
             scaling_recommendations=scaling_recs,
             metadata={
@@ -206,12 +747,17 @@ class RequirementAnalyzer:
         
     def _generate_api_endpoints(
         self, 
-        domain_name: str, 
+        domain_name: str,
         keywords: List[str],
         actions: List[str],
-        entities: List[str]
+        entities: List[str],
+        doc_verbs: List[Tuple[str, str, int]] = None,
     ) -> List[ApiEndpoint]:
-        """Generate RESTful API endpoints based on domain and extracted actions"""
+        """
+        Generate RESTful API endpoints.
+        Priority: actual verb-entity pairs found in the document (inferred=False)
+        → template entries for gaps (inferred=True).
+        """
         
         endpoints = []
         service_path = domain_name.lower().replace(" ", "").replace("&", "")
@@ -275,15 +821,44 @@ class RequirementAnalyzer:
                 {"path": f"/api/v1/{resource}/{{id}}", "method": "PUT", "desc": f"Update {domain_name} resource"},
             ]
             
-        # Convert to ApiEndpoint objects
+        # ── Document-grounded endpoints (inferred=False) ─────────────────────
+        VERB_METHOD: Dict[str, str] = {
+            "create": "POST", "add": "POST", "register": "POST", "submit": "POST",
+            "place": "POST", "upload": "POST", "send": "POST", "post": "POST",
+            "get": "GET", "retrieve": "GET", "fetch": "GET", "view": "GET",
+            "list": "GET", "search": "GET", "find": "GET", "show": "GET", "browse": "GET",
+            "update": "PUT", "modify": "PUT", "edit": "PUT", "change": "PUT", "set": "PUT",
+            "delete": "DELETE", "remove": "DELETE", "cancel": "DELETE", "deactivate": "DELETE",
+        }
+        doc_paths_used: Set[str] = set()
+        if doc_verbs:
+            for verb, entity, _line in doc_verbs[:6]:
+                method = VERB_METHOD.get(verb, "POST")
+                entity_slug = entity.replace(" ", "-").rstrip("s")
+                if method in ("GET", "DELETE", "PUT"):
+                    path = f"/api/v1/{entity_slug}s/{{id}}"
+                else:
+                    path = f"/api/v1/{entity_slug}s"
+                if path not in doc_paths_used:
+                    doc_paths_used.add(path)
+                    endpoints.append(ApiEndpoint(
+                        path=path,
+                        method=method,
+                        description=f"{verb.capitalize()} {entity} — derived from document line {_line}",
+                        inferred=False,
+                    ))
+
+        # ── Template-based endpoints for gaps (inferred=True) ─────────────────
         for ep_def in endpoint_defs:
-            endpoints.append(ApiEndpoint(
-                path=ep_def["path"],
-                method=ep_def["method"],
-                description=ep_def["desc"]
-            ))
-            
-        return endpoints
+            if ep_def["path"] not in doc_paths_used:
+                endpoints.append(ApiEndpoint(
+                    path=ep_def["path"],
+                    method=ep_def["method"],
+                    description=ep_def["desc"],
+                    inferred=not bool(doc_verbs),  # inferred only when doc gave us nothing
+                ))
+
+        return endpoints[:8]  # cap at 8 per service
         
     def _generate_scaling_recommendations(self, domain_name: str, keywords: List[str]) -> List[str]:
         """Generate intelligent scaling and architecture recommendations"""
@@ -503,125 +1078,269 @@ class RequirementAnalyzer:
 
         return dependencies
         
+    def _compute_svc_fr_ids(
+        self,
+        services: List[MicroserviceSchema],
+        significant_domains: List[Tuple],
+        fr_ids: Dict[str, List[Dict]],
+    ) -> Dict[str, Set[str]]:
+        """
+        Assign each FR-ID to every service whose matched keywords appear in
+        that FR-ID's source sentence.  Central computation reused by the gate,
+        metrics, impact map, and traceability builder.
+        """
+        kw_map: Dict[str, List[str]] = {
+            svc.id: d[2] for svc, d in zip(services, significant_domains)
+        }
+        svc_fr: Dict[str, Set[str]] = {svc.id: set() for svc in services}
+        for fr_id, occ_list in fr_ids.items():
+            for occ in occ_list:
+                sentence_lower = occ["sentence"].lower()
+                for svc_id, kws in kw_map.items():
+                    if any(kw in sentence_lower for kw in kws):
+                        svc_fr[svc_id].add(fr_id)
+        return svc_fr
+
+    def _apply_fr_id_gate(
+        self,
+        services: List[MicroserviceSchema],
+        svc_fr_ids: Dict[str, Set[str]],
+        total_fr_count: int,
+    ) -> List[MicroserviceSchema]:
+        """
+        When the document contains FR-IDs, stamp each service's inferred flag.
+        A service with < 2 FR-IDs is inferred — it may be noise from keyword
+        frequency, not from a stated requirement.  We keep it but flag it so
+        the UI can surface it clearly rather than silently hallucinating.
+        """
+        for svc in services:
+            fr_set = svc_fr_ids.get(svc.id, set())
+            svc.justified_fr_ids = sorted(fr_set)
+            if total_fr_count >= 2:
+                svc.inferred = len(fr_set) < 2
+        return services
+
+    def _compute_impact_map(
+        self, svc_fr_ids: Dict[str, Set[str]]
+    ) -> Dict[str, List[str]]:
+        """
+        Invert service→FR-IDs to FR-ID→[service_ids].
+        Used for change-impact analysis: if FR-X changes, which services are affected?
+        """
+        impact: Dict[str, List[str]] = {}
+        for svc_id, fr_set in svc_fr_ids.items():
+            for fr_id in fr_set:
+                impact.setdefault(fr_id, []).append(svc_id)
+        return impact
+
+    def _merge_overlapping_services(
+        self,
+        services: List[MicroserviceSchema],
+        significant_domains: List[Tuple],
+        fr_ids: Dict[str, List[Dict]],
+    ) -> Tuple[List[MicroserviceSchema], List[Tuple]]:
+        """
+        Drop the lower-scoring partner of any service pair whose FR-IDs overlap > 60%.
+        An FR-ID belongs to a service when it appears in a sentence that also
+        contains at least one of the service's matched domain keywords.
+
+        This is the merge gate that prevents over-engineering: two supposed
+        boundaries that the document treats as a single concern collapse into one.
+        """
+        if not fr_ids:
+            return services, significant_domains
+
+        # Build per-service FR-ID sets
+        kw_map: Dict[str, List[str]] = {
+            svc.id: d[2] for svc, d in zip(services, significant_domains)
+        }
+        svc_fr: Dict[str, set] = {}
+        for svc in services:
+            matched: set = set()
+            for fr_id, occ_list in fr_ids.items():
+                for occ in occ_list:
+                    if any(kw in occ["sentence"].lower() for kw in kw_map[svc.id]):
+                        matched.add(fr_id)
+                        break
+            svc_fr[svc.id] = matched
+
+        score_map: Dict[str, float] = {
+            svc.id: d[1] for svc, d in zip(services, significant_domains)
+        }
+        to_remove: set = set()
+
+        for i in range(len(services)):
+            if services[i].id in to_remove:
+                continue
+            for j in range(i + 1, len(services)):
+                if services[j].id in to_remove:
+                    continue
+                a_fr = svc_fr[services[i].id]
+                b_fr = svc_fr[services[j].id]
+                if not a_fr or not b_fr:
+                    continue
+                shared = len(a_fr & b_fr)
+                overlap = shared / min(len(a_fr), len(b_fr))
+                if overlap > 0.60:
+                    drop_id = (
+                        services[j].id
+                        if score_map[services[i].id] >= score_map[services[j].id]
+                        else services[i].id
+                    )
+                    to_remove.add(drop_id)
+                    keep_name = next(
+                        s.name for s in services
+                        if s.id != drop_id and s.id in {services[i].id, services[j].id}
+                    )
+                    drop_name = next(s.name for s in services if s.id == drop_id)
+                    print(f"   🔀 Merged '{drop_name}' into '{keep_name}' ({overlap:.0%} FR-ID overlap)")
+
+        if not to_remove:
+            return services, significant_domains
+
+        kept_svcs = [s for s in services if s.id not in to_remove]
+        kept_doms = [d for s, d in zip(services, significant_domains) if s.id not in to_remove]
+        return kept_svcs, kept_doms
+
     def _build_traceability(
         self,
         text: str,
         services: List[MicroserviceSchema],
-        significant_domains: List[Tuple]
+        significant_domains: List[Tuple],
+        fr_ids: Dict[str, List[Dict]] = None,
+        svc_fr_ids: Dict[str, Set[str]] = None,
     ) -> List[Dict]:
         """
-        Build a requirements-traceability matrix using statistical semantic similarity.
-        For each service, find the most relevant sentences from the document using:
-        1. Keyword frequency scoring (TF-IDF inspired)
-        2. Semantic similarity via embeddings (if available)
-        3. Position weighting (earlier mentions = higher relevance)
-        
-        Returns list of service-to-requirements mappings with confidence scores.
+        Build a requirements-traceability matrix with:
+        • Line-level provenance on every matched sentence
+        • justified_fr_ids: the exact FR-IDs that justify this service boundary
+        • boundary_justification: the DDD split rationale
         """
-        import re as _re
+        # Build sentence → FR-IDs reverse lookup
+        fr_by_sentence: Dict[str, List[str]] = {}
+        if fr_ids:
+            for fr_id, occurrences in fr_ids.items():
+                for occ in occurrences:
+                    fr_by_sentence.setdefault(occ["sentence"], []).append(fr_id)
 
-        # Split document into clean sentences
-        raw_sentences = _re.split(r'(?<=[.!?])\s+', text.strip())
-        sentences = [s.strip() for s in raw_sentences if len(s.strip()) > 20]
-
+        lines = text.split('\n')
         matrix = []
-        for service, (domain_name, confidence, matched_keywords) in zip(services, significant_domains):
-            sentence_scores = []
-            
-            for idx, sentence in enumerate(sentences):
-                sentence_lower = sentence.lower()
-                score = 0.0
-                matched_kws = []
-                
-                # Score 1: Keyword frequency with weight for multi-word phrases
-                for kw in matched_keywords:
-                    if kw in sentence_lower:
-                        # Multi-word phrases get higher weight (more specific)
-                        word_count = len(kw.split())
-                        score += word_count * 2
-                        matched_kws.append(kw)
-                
-                # Score 2: Position bias (earlier = more important)
-                # First 20% of document gets +30% boost, last 20% gets -20% penalty
-                position_ratio = idx / len(sentences) if sentences else 0
-                if position_ratio < 0.2:
-                    score *= 1.3
-                elif position_ratio > 0.8:
-                    score *= 0.8
-                
-                # Score 3: Sentence length normalization (avoid very short/long sentences)
-                word_count = len(sentence.split())
-                if 10 <= word_count <= 40:  # Ideal sentence length
-                    score *= 1.1
-                elif word_count < 5 or word_count > 80:  # Too short/long
-                    score *= 0.7
-                
-                if score > 0:
-                    sentence_scores.append({
-                        "sentence": sentence,
-                        "score": score,
-                        "matched_keywords": matched_kws,
-                        "position": idx
-                    })
-            
-            # Sort by score and take top 3
-            sentence_scores.sort(key=lambda x: x["score"], reverse=True)
-            top_sentences = sentence_scores[:3]
-            
-            # Format relevant sentences with truncation
+        for service, domain_entry in zip(services, significant_domains):
+            domain_name, confidence, matched_keywords = domain_entry[0], domain_entry[1], domain_entry[2]
             relevant = []
-            for item in top_sentences:
-                sentence = item["sentence"]
-                display = sentence if len(sentence) <= 160 else sentence[:157] + "..."
-                relevant.append({
-                    "text": display,
-                    "relevance_score": round(item["score"], 2),
-                    "matched_keywords": item["matched_keywords"][:3],  # Top 3 matched keywords
-                    "position_in_document": item["position"] + 1  # 1-indexed for humans
-                })
-
-            # Calculate overall traceability confidence
-            # Based on: number of matches, keyword diversity, score distribution
-            if sentence_scores:
-                avg_score = sum(s["score"] for s in sentence_scores) / len(sentence_scores)
-                keyword_coverage = len(set(kw for s in top_sentences for kw in s["matched_keywords"])) / len(matched_keywords) if matched_keywords else 0
-                traceability_confidence = min(100, (avg_score * 5) + (keyword_coverage * 30))
-            else:
-                traceability_confidence = 0
+            seen: set = set()
+            for line_num, line in enumerate(lines, 1):
+                line_strip = line.strip()
+                if len(line_strip) <= 20:
+                    continue
+                if any(kw in line_strip.lower() for kw in matched_keywords):
+                    display = line_strip if len(line_strip) <= 160 else line_strip[:157] + "..."
+                    if display not in seen:
+                        seen.add(display)
+                        relevant.append({
+                            "text": display,
+                            "line": line_num,
+                            "fr_ids": fr_by_sentence.get(line_strip, []),
+                        })
+                if len(relevant) >= 3:
+                    break
 
             matrix.append({
                 "service_id": service.id,
                 "service_name": service.name,
                 "domain": domain_name,
-                "confidence": round(traceability_confidence, 1),
-                "domain_confidence": round(confidence, 1),
+                "confidence": round(confidence, 1),
                 "matched_keywords": matched_keywords[:6],
-                # requirement_sentences must be plain strings for the frontend
-                "requirement_sentences": [item["sentence"] if len(item["sentence"]) <= 160 else item["sentence"][:157] + "..." for item in top_sentences],
-                "total_sentence_matches": len(sentence_scores),
+                "requirement_sentences": relevant,
+                "boundary_justification": service.boundary_justification,
+                "justified_fr_ids": sorted(svc_fr_ids.get(service.id, set())) if svc_fr_ids else service.justified_fr_ids,
+                "inferred": service.inferred,
             })
 
         return matrix
 
+    def _real_coupling_from_fr_ids(
+        self,
+        services: List[MicroserviceSchema],
+        svc_fr_ids: Optional[Dict[str, Set[str]]] = None,
+    ) -> Optional[int]:
+        """
+        Real coupling = mean fraction of each service's FR-IDs that are also
+        cited by at least one other service, scaled 0-100.
+        Formula: mean( |cross_fr(S)| / |fr(S)| ) × 100
+        Returns None when no FR-ID data is available (triggers structural fallback).
+        """
+        if not svc_fr_ids:
+            return None
+        per_svc = []
+        for svc in services:
+            fr_set = svc_fr_ids.get(svc.id, set())
+            if not fr_set:
+                continue
+            cross = {
+                fr for fr in fr_set
+                if any(fr in svc_fr_ids.get(o.id, set()) for o in services if o.id != svc.id)
+            }
+            per_svc.append(len(cross) / len(fr_set))
+        if not per_svc:
+            return None
+        return min(95, int(sum(per_svc) / len(per_svc) * 100))
+
+    def _real_cohesion(
+        self,
+        fr_set: Set[str],
+        matched_kws: List[str],
+        fr_ids_data: Dict[str, List[Dict]],
+    ) -> float:
+        """
+        Cohesion = % of FR-ID pairs within a service that share ≥1 domain keyword.
+        Formula: |sharing_pairs| / |total_pairs| × 100
+        Returns 100 for single-FR-ID services (trivially cohesive).
+        """
+        if len(fr_set) <= 1:
+            return 100.0 if fr_set else 50.0
+        fr_list = list(fr_set)
+        fr_kws: Dict[str, Set[str]] = {}
+        for fr_id in fr_list:
+            occs = fr_ids_data.get(fr_id, [])
+            kw_set: Set[str] = set()
+            for occ in occs:
+                s = occ.get("sentence", "").lower()
+                for kw in matched_kws:
+                    if kw in s:
+                        kw_set.add(kw)
+            fr_kws[fr_id] = kw_set
+        total_pairs = len(fr_list) * (len(fr_list) - 1) / 2
+        sharing = sum(
+            1
+            for i, a in enumerate(fr_list)
+            for b in fr_list[i + 1 :]
+            if fr_kws.get(a, set()) & fr_kws.get(b, set())
+        )
+        return round(sharing / total_pairs * 100, 1) if total_pairs else 50.0
+
     def _calculate_metrics_with_breakdown(
-        self, 
-        services: List[MicroserviceSchema], 
+        self,
+        services: List[MicroserviceSchema],
         dependencies: List[DependencyInfo],
-        text: str
+        text: str,
+        svc_fr_ids: Optional[Dict[str, Set[str]]] = None,
+        fr_ids_data: Optional[Dict[str, List[Dict]]] = None,
     ) -> Tuple[MetricScores, Dict[str, MetricBreakdown]]:
         """
-        Calculate architecture quality metrics WITH complete statistical breakdown and explanations.
-        
+        Calculate architecture quality metrics WITH complete statistical breakdown.
+        Now includes FR-ID-based coupling, cohesion computation, and document alignment.
+
         Returns:
             Tuple of (MetricScores, Dict[metric_name -> MetricBreakdown])
-        
+
         All scores are 0-100. For Coupling, lower = better. For others, higher = better.
         """
         n_services = len(services)
         n_deps = len(dependencies)
 
         if n_services == 0:
-            empty_metrics = MetricScores(scalability=0, coupling=100, maintainability=0, fault_isolation=0)
+            empty_metrics = MetricScores(scalability=0, coupling=100, maintainability=0, fault_isolation=0, cohesion=50)
             return empty_metrics, {}
 
         avg_deps = n_deps / n_services
@@ -638,75 +1357,89 @@ class RequirementAnalyzer:
         # ============================================================================
         coupling_factors = []
         
-        # Factor 1: Total Dependencies
-        coupling_factors.append(MetricFactor(
-            name="Total Dependencies Detected",
-            value=n_deps,
-            impact="Base factor",
-            explanation=f"{n_deps} dependencies found across {n_services} services",
-            statistical_basis="Research: Microservices with >20 deps show 3x deployment issues (Fowler, 2014)"
-        ))
+        # Try FR-ID-based coupling first (when FR-IDs are available)
+        fr_coupling_score = self._real_coupling_from_fr_ids(services, svc_fr_ids) if svc_fr_ids else None
         
-        # Factor 2: Average Dependencies per Service
-        coupling_factors.append(MetricFactor(
-            name="Average Dependencies per Service",
-            value=round(avg_deps, 2),
-            impact="Primary driver",
-            explanation=f"Each service averages {avg_deps:.1f} dependencies",
-            statistical_basis="Industry benchmark: <2 deps/service = loose coupling, >4 = high coupling"
-        ))
-        
-        # Calculate coupling score based on bands
-        if avg_deps == 0:
-            coupling_score = 35
-            band = "No Dependencies"
+        if fr_coupling_score is not None:
+            coupling_score = fr_coupling_score
             coupling_factors.append(MetricFactor(
-                name="Band Classification",
-                value=band,
-                impact="Score set to 35",
-                explanation="No dependencies detected (suspicious for real systems)",
-                statistical_basis="Real systems require integration; 0 deps indicates incomplete analysis"
+                name="FR-ID-Based Coupling",
+                value="Computed from requirement traceability",
+                impact=f"Score: {coupling_score}",
+                explanation="Coupling measured by shared functional requirements across services",
+                statistical_basis="Requirements overlap indicates interface dependencies and shared concerns"
             ))
-        elif avg_deps <= 1:
-            coupling_score = int(20 + avg_deps * 15)
-            band = "Very Loose (Excellent)"
-            coupling_factors.append(MetricFactor(
-                name="Band Classification",
-                value=band,
-                impact=f"Score: 20 + ({avg_deps:.2f} × 15) = {coupling_score}",
-                explanation="Services are very loosely coupled (optimal for independent deployment)",
-                statistical_basis="Newman (2015): <1 avg dep enables true microservices autonomy"
-            ))
-        elif avg_deps <= 3:
-            coupling_score = int(35 + (avg_deps - 1) * 10)
-            band = "Healthy Range"
-            coupling_factors.append(MetricFactor(
-                name="Band Classification",
-                value=band,
-                impact=f"Score: 35 + (({avg_deps:.2f} - 1) × 10) = {coupling_score}",
-                explanation="Moderate coupling typical of well-designed microservices",
-                statistical_basis="Industry norm: 1-3 deps/service balances isolation and integration"
-            ))
-        elif avg_deps <= 5:
-            coupling_score = int(55 + (avg_deps - 3) * 10)
-            band = "Moderate Coupling"
-            coupling_factors.append(MetricFactor(
-                name="Band Classification",
-                value=band,
-                impact=f"Score: 55 + (({avg_deps:.2f} - 3) × 10) = {coupling_score}",
-                explanation="Manageable but coordination overhead increases deployment complexity",
-                statistical_basis="At 4-5 deps/service, change propagation affects 3+ services"
-            ))
+            band = "FR-ID Analysis"
         else:
-            coupling_score = min(95, int(75 + (avg_deps - 5) * 4))
-            band = "High Coupling (Risk)"
+            # Fallback to structural dependency-based coupling
             coupling_factors.append(MetricFactor(
-                name="Band Classification",
-                value=band,
-                impact=f"Score: 75 + (({avg_deps:.2f} - 5) × 4) = {coupling_score}",
-                explanation="High coupling creates deployment bottlenecks and cascading failures",
-                statistical_basis="Systems with >5 avg deps show 4x higher MTTR (Google SRE, 2016)"
+                name="Total Dependencies Detected",
+                value=n_deps,
+                impact="Base factor",
+                explanation=f"{n_deps} dependencies found across {n_services} services",
+                statistical_basis="Research: Microservices with >20 deps show 3x deployment issues (Fowler, 2014)"
             ))
+            
+            # Factor 2: Average Dependencies per Service
+            coupling_factors.append(MetricFactor(
+                name="Average Dependencies per Service",
+                value=round(avg_deps, 2),
+                impact="Primary driver",
+                explanation=f"Each service averages {avg_deps:.1f} dependencies",
+                statistical_basis="Industry benchmark: <2 deps/service = loose coupling, >4 = high coupling"
+            ))
+            
+            # Calculate coupling score based on bands
+            if avg_deps == 0:
+                coupling_score = 35
+                band = "No Dependencies"
+                coupling_factors.append(MetricFactor(
+                    name="Band Classification",
+                    value=band,
+                    impact="Score set to 35",
+                    explanation="No dependencies detected (suspicious for real systems)",
+                    statistical_basis="Real systems require integration; 0 deps indicates incomplete analysis"
+                ))
+            elif avg_deps <= 1:
+                coupling_score = int(20 + avg_deps * 15)
+                band = "Very Loose (Excellent)"
+                coupling_factors.append(MetricFactor(
+                    name="Band Classification",
+                    value=band,
+                    impact=f"Score: 20 + ({avg_deps:.2f} × 15) = {coupling_score}",
+                    explanation="Services are very loosely coupled (optimal for independent deployment)",
+                    statistical_basis="Newman (2015): <1 avg dep enables true microservices autonomy"
+                ))
+            elif avg_deps <= 3:
+                coupling_score = int(35 + (avg_deps - 1) * 10)
+                band = "Healthy Range"
+                coupling_factors.append(MetricFactor(
+                    name="Band Classification",
+                    value=band,
+                    impact=f"Score: 35 + (({avg_deps:.2f} - 1) × 10) = {coupling_score}",
+                    explanation="Moderate coupling typical of well-designed microservices",
+                    statistical_basis="Industry norm: 1-3 deps/service balances isolation and integration"
+                ))
+            elif avg_deps <= 5:
+                coupling_score = int(55 + (avg_deps - 3) * 10)
+                band = "Moderate Coupling"
+                coupling_factors.append(MetricFactor(
+                    name="Band Classification",
+                    value=band,
+                    impact=f"Score: 55 + (({avg_deps:.2f} - 3) × 10) = {coupling_score}",
+                    explanation="Manageable but coordination overhead increases deployment complexity",
+                    statistical_basis="At 4-5 deps/service, change propagation affects 3+ services"
+                ))
+            else:
+                coupling_score = min(95, int(75 + (avg_deps - 5) * 4))
+                band = "High Coupling (Risk)"
+                coupling_factors.append(MetricFactor(
+                    name="Band Classification",
+                    value=band,
+                    impact=f"Score: 75 + (({avg_deps:.2f} - 5) × 4) = {coupling_score}",
+                    explanation="High coupling creates deployment bottlenecks and cascading failures",
+                    statistical_basis="Systems with >5 avg deps show 4x higher MTTR (Google SRE, 2016)"
+                ))
         
         # Factor 3: Sync vs Async Ratio
         if n_deps > 0:
@@ -945,16 +1678,80 @@ class RequirementAnalyzer:
             }
         )
 
+        # ============================================================================
+        # COHESION METRIC (Higher = Better)
+        # ============================================================================
+        cohesion_factors = []
+        cohesion_scores = []
+        
+        if svc_fr_ids and fr_ids_data:
+            for svc in services:
+                fr_set = svc_fr_ids.get(svc.id, set())
+                matched_kws = (svc.metadata or {}).get("matched_keywords", [])
+                svc_cohesion = self._real_cohesion(fr_set, matched_kws, fr_ids_data)
+                cohesion_scores.append(svc_cohesion)
+            
+            if cohesion_scores:
+                cohesion_score = int(sum(cohesion_scores) / len(cohesion_scores))
+                cohesion_factors.append(MetricFactor(
+                    name="FR-ID-Based Cohesion",
+                    value=f"{len(cohesion_scores)} services analyzed",
+                    impact=f"Average: {cohesion_score}%",
+                    explanation="Measures how tightly related the functional requirements within each service are",
+                    statistical_basis="High cohesion: FR-IDs share domain keywords; indicates focused service boundaries"
+                ))
+                cohesion_factors.append(MetricFactor(
+                    name="Per-Service Cohesion Range",
+                    value=f"{min(cohesion_scores):.0f}% – {max(cohesion_scores):.0f}%",
+                    impact="Service boundary quality indicator",
+                    explanation="Wide variance suggests some services lack clear focus",
+                    statistical_basis="Tight range (±10%) indicates consistent domain modeling"
+                ))
+            else:
+                cohesion_score = 50
+                cohesion_factors.append(MetricFactor(
+                    name="No FR-ID Data",
+                    value=0,
+                    impact="Default: 50",
+                    explanation="Cannot compute cohesion without functional requirements",
+                    statistical_basis="Cohesion requires FR-ID traceability"
+                ))
+        else:
+            cohesion_score = 50
+            cohesion_factors.append(MetricFactor(
+                name="No FR-ID Data",
+                value=0,
+                impact="Default: 50",
+                explanation="Cannot compute cohesion without functional requirements",
+                statistical_basis="Cohesion requires FR-ID traceability"
+            ))
+        
+        cohesion_breakdown = MetricBreakdown(
+            metric_name="Cohesion",
+            final_score=cohesion_score,
+            rating=self._get_rating(cohesion_score, "cohesion"),
+            formula="mean( |sharing_pairs| / |total_pairs| × 100 ) across all services",
+            factors=cohesion_factors,
+            recommendation=self._generate_cohesion_recommendation(cohesion_score, cohesion_scores),
+            statistical_context="Single Responsibility Principle (Martin, 2003); Domain-Driven Design cohesion",
+            raw_data={
+                "per_service_cohesion": [round(c, 1) for c in cohesion_scores] if cohesion_scores else [],
+                "services_analyzed": len(cohesion_scores)
+            }
+        )
+
         return MetricScores(
             scalability=scalability_score,
             coupling=coupling_score,
             maintainability=maintainability_score,
-            fault_isolation=fault_isolation_score
+            fault_isolation=fault_isolation_score,
+            cohesion=cohesion_score
         ), {
             "coupling": coupling_breakdown,
             "scalability": scalability_breakdown,
             "maintainability": maintainability_breakdown,
-            "fault_isolation": fault_isolation_breakdown
+            "fault_isolation": fault_isolation_breakdown,
+            "cohesion": cohesion_breakdown
         }
 
     def _generate_coupling_recommendation(self, score: int, deps: List[DependencyInfo], service_dep_count: dict) -> str:
@@ -1013,6 +1810,19 @@ class RequirementAnalyzer:
             return f"Moderate fault isolation. Convert {sync_deps} sync dependencies to async (message queues, event bus) to prevent cascading failures."
         else:
             return "Poor fault isolation. High sync dependency count creates cascading failure risk. Implement: 1) Circuit breakers, 2) Message queues, 3) Retry with exponential backoff."
+
+    def _generate_cohesion_recommendation(self, score: int, per_svc_scores: List[float]) -> str:
+        """Generate cohesion improvement recommendations"""
+        if score >= 75:
+            return "Excellent cohesion! Services have tightly focused responsibilities with related FRs."
+        elif score >= 60:
+            return "Good cohesion. Services are well-aligned with their domains. Monitor new feature additions."
+        elif score >= 45:
+            if per_svc_scores and max(per_svc_scores) - min(per_svc_scores) > 30:
+                return f"Moderate cohesion with high variance. Review services with <50% cohesion for potential splitting."
+            return "Moderate cohesion. Some services may mix concerns. Review FR-IDs for boundary clarity."
+        else:
+            return "Low cohesion indicates mixed responsibilities. Refactor services using domain-driven bounded contexts."
 
     def _get_rating(self, score: int, metric_type: str) -> str:
         """Convert numeric score to rating based on metric type"""

@@ -11,6 +11,7 @@ export interface ApiEndpoint {
   path: string;
   method: string;
   description: string;
+  inferred?: boolean;
   request_payload?: Record<string, any>;
   response_payload?: Record<string, any>;
 }
@@ -22,6 +23,9 @@ export interface Microservice {
   domain: string;
   database: string;
   database_reasoning: string;
+  boundary_justification?: string;
+  inferred?: boolean;
+  justified_fr_ids?: string[];
   apis: ApiEndpoint[];
   scaling_recommendations: string[];
   metadata?: Record<string, unknown>;
@@ -39,6 +43,13 @@ export interface MetricScores {
   coupling: number;
   maintainability: number;
   fault_isolation: number;
+  cohesion?: number;
+}
+
+export interface RequirementSentence {
+  text: string;
+  line: number;
+  fr_ids: string[];
 }
 
 export interface TraceabilityRow {
@@ -47,7 +58,18 @@ export interface TraceabilityRow {
   domain: string;
   confidence: number;
   matched_keywords: string[];
-  requirement_sentences: string[];
+  requirement_sentences: RequirementSentence[];
+  boundary_justification?: string;
+  justified_fr_ids?: string[];
+  inferred?: boolean;
+}
+
+export interface ClarificationQuestion {
+  type: string;
+  question: string;
+  line: number;
+  sentence: string;
+  impact: string;
 }
 
 export interface AnalysisResult {
@@ -60,6 +82,9 @@ export interface AnalysisResult {
   raw_feedback: string;
   analysis_metadata?: {
     traceability?: TraceabilityRow[];
+    impact_map?: Record<string, string[]>;
+    clarifications?: ClarificationQuestion[];
+    flow_diagram?: string;
     [key: string]: unknown;
   };
 }
