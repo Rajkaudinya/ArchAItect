@@ -41,7 +41,7 @@ export interface Dependency {
 export interface MetricScores {
   scalability: number;
   coupling: number;
-  maintainability: number;
+  maintainability?: number;
   fault_isolation: number;
   cohesion?: number;
 }

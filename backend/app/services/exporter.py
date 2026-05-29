@@ -30,7 +30,6 @@ This document describes the recommended microservice architecture extracted from
 |--------|-------|------------|
 | 🚀 Scalability | {analysis.metrics.scalability}/100 | {ArchitectureExporter._get_assessment(analysis.metrics.scalability)} |
 | 🔗 Coupling | {analysis.metrics.coupling}/100 | {ArchitectureExporter._get_coupling_assessment(analysis.metrics.coupling)} |
-| 🔧 Maintainability | {analysis.metrics.maintainability}/100 | {ArchitectureExporter._get_assessment(analysis.metrics.maintainability)} |
 | 🛡️ Fault Isolation | {analysis.metrics.fault_isolation}/100 | {ArchitectureExporter._get_assessment(analysis.metrics.fault_isolation)} |
 
 ### Summary Statistics

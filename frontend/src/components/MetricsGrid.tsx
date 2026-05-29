@@ -1,6 +1,6 @@
 import React from 'react';
 import { MetricScores } from '../types';
-import { Shield, GitMerge, Activity, Zap, Target } from 'lucide-react';
+import { Shield, GitMerge, Zap, Target } from 'lucide-react';
 
 interface MetricsGridProps {
   metrics: MetricScores;
@@ -39,15 +39,6 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ metrics }) => {
       rating: getRating(metrics.coupling, 'coupling')
     },
     {
-      name: 'Maintainability Index',
-      score: metrics.maintainability,
-      icon: Activity,
-      color: 'from-emerald-500 to-teal-500',
-      textColor: 'text-emerald-400',
-      desc: 'Code complexity estimation, domain isolation boundary clarity, and database autonomy.',
-      rating: getRating(metrics.maintainability, 'other')
-    },
-    {
       name: 'Fault Isolation',
       score: metrics.fault_isolation,
       icon: Shield,
@@ -68,7 +59,7 @@ export const MetricsGrid: React.FC<MetricsGridProps> = ({ metrics }) => {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       {cards.map((card) => {
         const Icon = card.icon;
         return (
