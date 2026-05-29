@@ -54,9 +54,9 @@ async def upload_requirement_document(
         logger.info(f"Processing file: {filename} ({file_size} bytes) for project: {project_id}")
         
         print(f"\n{'='*60}")
-        print(f"📁 Processing file: {filename}")
-        print(f"📊 Project ID: {project_id}")
-        print(f"📏 File size: {file_size:,} bytes")
+        print(f"[FILE] Processing file: {filename}")
+        print(f"[PROJECT] Project ID: {project_id}")
+        print(f"[SIZE] File size: {file_size:,} bytes")
         print(f"{'='*60}\n")
         
         # 1. Parse File Content
@@ -95,7 +95,7 @@ async def upload_requirement_document(
             )
         
         logger.info(f"Parsed document: {parsed.get('word_count', 0)} words, {len(sections)} sections")
-        print(f"✅ Parsed document: {parsed.get('word_count', 0)} words, {len(sections)} sections\n")
+        print(f"[OK] Parsed document: {parsed.get('word_count', 0)} words, {len(sections)} sections\n")
     
         # 2. Extract Domains & Boundaries & APIs using Advanced NLP
         analyzer = get_analyzer()
@@ -108,14 +108,14 @@ async def upload_requirement_document(
         
         # 3. Cache results to project
         ans_file = get_analyses_file(project_id)
-        with open(ans_file, "w") as f:
+        with open(ans_file, "w", encoding="utf-8") as f:
             f.write(result.json())
         
         logger.info(f"Analysis completed successfully for project {project_id}")
         logger.info(f"Generated {len(result.microservices)} microservices with {len(result.dependencies)} dependencies")
         
-        print(f"\n💾 Analysis saved to: {ans_file}")
-        print(f"✅ Generated {len(result.microservices)} microservices")
+        print(f"\n[SAVED] Analysis saved to: {ans_file}")
+        print(f"[OK] Generated {len(result.microservices)} microservices")
         print(f"{'='*60}\n")
             
         return result
@@ -136,7 +136,7 @@ def get_latest_analysis(project_id: str):
     if not os.path.exists(ans_file):
         # Return fallback default architecture for the demo/onboarding project
         if project_id == "project-onboarding":
-            print(f"🎯 Generating default onboarding analysis...")
+            print(f"[DEFAULT] Generating default onboarding analysis...")
             default_req = (
                 "# E-Commerce Platform Requirements\n\n"
                 "Users can register accounts, login securely, view personalized dashboards, "
@@ -148,12 +148,12 @@ def get_latest_analysis(project_id: str):
             )
             analyzer = get_analyzer()
             result = analyzer.analyze_requirements(default_req, project_id, "srs_default.txt")
-            with open(ans_file, "w") as f:
+            with open(ans_file, "w", encoding="utf-8") as f:
                 f.write(result.json())
             return result
         raise HTTPException(status_code=404, detail="No analysis found for this project")
         
-    with open(ans_file, "r") as f:
+    with open(ans_file, "r", encoding="utf-8") as f:
         return json.load(f)
 
 @router.put("/{project_id}", response_model=AnalysisResult)
@@ -162,7 +162,7 @@ def update_analysis(project_id: str, updated_result: AnalysisResult):
     Saves customized architecture configurations updated directly on the diagram canvas by the user.
     """
     ans_file = get_analyses_file(project_id)
-    with open(ans_file, "w") as f:
+    with open(ans_file, "w", encoding="utf-8") as f:
         f.write(updated_result.json())
     return updated_result
 

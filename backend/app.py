@@ -9,12 +9,12 @@ from app.config import settings
 def main():
     """Start the ArchAItect Core AI Engine Server"""
     print("=" * 70)
-    print("🚀 Starting ArchAItect Core AI Engine Server...")
+    print("[STARTUP] Starting ArchAItect Core AI Engine Server...")
     print("=" * 70)
-    print(f"📍 Server Address: http://{settings.HOST}:{settings.PORT}")
-    print(f"📚 API Documentation: http://{settings.HOST}:{settings.PORT}/docs")
-    print(f"🔑 Groq API Key: {'Configured ✓' if settings.GROQ_API_KEY else 'Not Set ✗'}")
-    print(f"💾 Data Directory: {settings.DATA_DIR}")
+    print(f"[SERVER] Server Address: http://{settings.HOST}:{settings.PORT}")
+    print(f"[DOCS] API Documentation: http://{settings.HOST}:{settings.PORT}/docs")
+    print(f"[CONFIG] Groq API Key: {'Configured' if settings.GROQ_API_KEY else 'Not Set'}")
+    print(f"[DATA] Data Directory: {settings.DATA_DIR}")
     print("=" * 70)
     print()
     

@@ -48,7 +48,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess, project
 
       if (!response.ok) {
         const errDetail = await response.json();
-        throw new Error(errDetail.detail || "Server failed to parse document");
+        throw new Error(errDetail.detail || errDetail.error || "Server failed to parse document");
       }
 
       const result = await response.json();

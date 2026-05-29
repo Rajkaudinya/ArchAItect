@@ -18,18 +18,18 @@ def load_projects() -> List[dict]:
     p_file = get_projects_file()
     if not os.path.exists(p_file):
         # Create empty template
-        with open(p_file, "w") as f:
+        with open(p_file, "w", encoding="utf-8") as f:
             json.dump([], f)
         return []
     try:
-        with open(p_file, "r") as f:
+        with open(p_file, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return []
 
 def save_projects(projects: List[dict]):
     p_file = get_projects_file()
-    with open(p_file, "w") as f:
+    with open(p_file, "w", encoding="utf-8") as f:
         json.dump(projects, f, indent=2, default=str)
 
 @router.get("", response_model=List[ProjectInDB])
