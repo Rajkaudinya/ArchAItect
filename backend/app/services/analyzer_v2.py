@@ -610,7 +610,13 @@ STRICT RULES — follow every one:
     - Authentication check, Stock availability, Payment success/failure,
       any business rule that produces two outcomes.
 6.  Show at least ONE ERROR / FAILURE path per decision (retry, cancel, error page).
-7.  System-triggered async steps (emails, notifications, webhooks) use dashed arrows: `-->|async|`.
+7.  ARROW SYNTAX (CRITICAL - invalid syntax breaks rendering):
+    - Solid arrows with labels: `A -->|label| B` (correct)
+    - Solid arrows without labels: `A --> B` (correct)
+    - Dashed arrows with labels: `A -.->|label| B` (correct)
+    - Dashed arrows without labels: `A -.-> B` (correct)
+    - NEVER use: `-->|label|>` or `--|label|>` or `--|>` (invalid - extra > at end)
+    - System-triggered async steps use dashed arrows: `A -.->|async| B`
 8.  Each node ID must be a simple alphanumeric token (no spaces, no special chars).
 9.  Labels must be human-readable business language — NOT class names or method names.
 10. Maximum 30 nodes total. Every subgraph must have at least 2 nodes.
@@ -637,6 +643,16 @@ Generate the diagram now:"""
             raw = re.sub(r"^```(?:mermaid)?\s*\n?", "", raw, flags=re.MULTILINE)
             raw = re.sub(r"\n?```\s*$", "", raw, flags=re.MULTILINE)
             raw = raw.strip()
+            
+            # ── Fix invalid arrow syntax ─────────────────────────────────────
+            # Fix invalid solid arrow syntax: -->|label|> → -->|label|
+            raw = re.sub(r"-->\|([^|]+)\|>", r"-->|\1|", raw)
+            # Fix invalid dashed arrow syntax: -.->|label|> → -.->|label|
+            raw = re.sub(r"-\.\->\|([^|]+)\|>", r"-.->|\1|", raw)
+            # Fix invalid dashed arrow syntax (old): --|label|> → -.->|label|
+            raw = re.sub(r"--\|([^|]+)\|>", r"-.->|\1|", raw)
+            # Fix invalid dashed arrow without label: --|> → -.->
+            raw = re.sub(r"--\|>", r"-.->", raw)
 
             # ── Validate: must begin with a Mermaid chart declaration ────────
             if re.match(r"^(flowchart|graph)\s+", raw, re.IGNORECASE):

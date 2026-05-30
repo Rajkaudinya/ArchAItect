@@ -1,0 +1,44 @@
+flowchart TD
+    subgraph UserManagement["User & Authentication"]
+        UserID([User]) -->|register|> RegisterID[Register User]
+        RegisterID -->|auth|> AuthID[Authenticate User]
+        AuthID -->|check|> AuthCheckID[Authentication Check]
+        AuthCheckID -.->|success| AuthSuccessID[Authenticated]
+        AuthCheckID -.->|failure| AuthFailureID[Authentication Failed]
+        AuthSuccessID -->|login|> LoginID[Login User]
+        AuthFailureID -->|retry|> AuthCheckID
+        AuthSuccessID -->|forgot|> ForgotID[Forgot Password]
+        ForgotID -->|reset|> ResetID[Reset Password]
+    end
+
+    subgraph ProductCatalog["Product & Catalog"]
+        subgraph SearchService["Search & Discovery"]
+            SearchID[Search Products] -->|result|> SearchResultID[Search Result]
+            SearchResultID -->|view|> ViewID[View Product]
+        end
+        ViewID -->|add|> AddToCartID[Add to Cart]
+        AddToCartID -->|view|> CartID[View Cart]
+        CartID -->|checkout|> CheckoutID[Checkout]
+    end
+
+    subgraph CartCheckout["Cart & Checkout"]
+        CheckoutID -->|payment|> PaymentID[Payment]
+        PaymentID -->|success|> PaymentSuccessID[Payment Success]
+        PaymentID -->|failure|> PaymentFailureID[Payment Failed]
+        PaymentSuccessID -->|confirm|> ConfirmID[Order Confirmation]
+        PaymentFailureID -->|retry|> PaymentID
+        ConfirmID -->|fulfill|> FulfillID[Fulfillment]
+        FulfillID -->|ship|> ShipID[Shipping]
+        ShipID -->|deliver|> DeliverID[Delivery]
+        DeliverID -->|notify|> NotifyID[Notification]
+    end
+
+    subgraph PaymentService["Payment & Billing"]
+        PaymentID -->|process|> ProcessID[Process Payment]
+        ProcessID -.->|success| PaymentSuccessID
+        ProcessID -.->|failure| PaymentFailureID
+    end
+
+    AuthSuccessID -->|continue|> SearchID
+    AuthFailureID -->|cancel|> CancelID[Cancel]
+    CancelID -->|exit|> ExitID[Exit]
