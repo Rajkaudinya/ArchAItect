@@ -23,7 +23,7 @@ function PageLoader() {
           </div>
           <div>
             <h1 className="font-display text-2xl font-bold tracking-tight text-[var(--text-primary)]">
-              Arch<span style={{ color: 'var(--cyan-deep)' }}>AItect</span>
+              Arch<span style={{ color: 'var(--cyan-deep)' }}>NAVI</span>tech
             </h1>
             <p className="font-mono-custom text-[9px] text-[var(--text-muted)] tracking-widest uppercase">
               Architecture Intelligence
@@ -71,10 +71,10 @@ type Tab = 'overview' | 'graph' | 'flow' | 'traceability' | 'clarify';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'overview',     label: 'Overview',      icon: <LayoutGrid size={13} /> },
-  { id: 'graph',        label: 'Topology',       icon: <Cpu size={13} /> },
   { id: 'flow',         label: 'Flow Diagram',   icon: <GitBranch size={13} /> },
-  { id: 'traceability', label: 'Traceability',   icon: <Table2 size={13} /> },
   { id: 'clarify',      label: 'Clarifications', icon: <HelpCircle size={13} /> },
+  { id: 'graph',        label: 'Topology',       icon: <Cpu size={13} /> },
+  { id: 'traceability', label: 'Traceability',   icon: <Table2 size={13} /> },
 ];
 
 /* ── App ───────────────────────────────────────────────────────── */
@@ -217,7 +217,7 @@ function App() {
               </div>
               <div>
                 <h1 className="font-display text-xl font-bold tracking-tight text-[var(--text-primary)]">
-                  Arch<span style={{ color: 'var(--cyan-deep)' }}>AItect</span>
+                  Arch<span style={{ color: 'var(--cyan-deep)' }}>NAVI</span>tech
                 </h1>
                 <p className="font-mono-custom text-[8px] text-[var(--text-muted)] tracking-[0.15em] uppercase hidden sm:block">
                   Microservice Intelligence
