@@ -8,164 +8,170 @@ interface TraceabilityTableProps {
 }
 
 export const TraceabilityTable: React.FC<TraceabilityTableProps> = ({ rows, impactMap = {} }) => {
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expanded,     setExpanded]    = useState<string | null>(null);
   const [impactTarget, setImpactTarget] = useState<string | null>(null);
 
   if (!rows || rows.length === 0) {
     return (
-      <div className="text-center py-8 text-xs text-slate-500 italic">
-        No traceability data available. Re-upload your requirements document to generate a matrix.
+      <div className="flex flex-col items-center justify-center py-12 gap-3">
+        <div className="bar-loader opacity-30">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="bar-loader-bar" />
+          ))}
+        </div>
+        <p className="text-xs text-[var(--text-muted)] italic">
+          No traceability data. Re-upload your requirements document to generate a matrix.
+        </p>
       </div>
     );
   }
 
-  const confidenceColor = (c: number) => {
-    if (c >= 60) return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
-    if (c >= 30) return 'text-yellow-400 bg-yellow-500/10 border-yellow-500/20';
-    return 'text-rose-400 bg-rose-500/10 border-rose-500/20';
+  const confidenceCss = (c: number) => {
+    if (c >= 60) return 'badge-emerald';
+    if (c >= 30) return 'badge-gold';
+    return 'badge-coral';
   };
 
-  const confidenceBarColor = (c: number) => {
-    if (c >= 60) return 'bg-emerald-500';
-    if (c >= 30) return 'bg-yellow-500';
-    return 'bg-rose-500';
+  const confidenceBar = (c: number) => {
+    if (c >= 60) return 'var(--emerald)';
+    if (c >= 30) return 'var(--gold)';
+    return 'var(--coral)';
   };
 
-  // Resolve service names from IDs for impact display
   const idToName: Record<string, string> = {};
   rows.forEach(r => { idToName[r.service_id] = r.service_name; });
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       {/* Header */}
-      <div className="grid grid-cols-[1fr_120px_1fr] gap-3 px-3 pb-1 border-b border-slate-800">
-        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Microservice</span>
-        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500 text-center">Confidence</span>
-        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Matched Keywords</span>
+      <div className="grid grid-cols-[1fr_110px_1fr] gap-3 px-4 pb-2.5 border-b border-[var(--border-light)]">
+        <span className="section-label">Microservice</span>
+        <span className="section-label text-center">Confidence</span>
+        <span className="section-label">Matched Keywords</span>
       </div>
 
-      {rows.map((row) => {
-        const isOpen = expanded === row.service_id;
-        const confidenceVal = typeof row.confidence === 'number' ? row.confidence : 0;
+      {rows.map((row, rowIdx) => {
+        const isOpen     = expanded === row.service_id;
+        const confidence = typeof row.confidence === 'number' ? row.confidence : 0;
         const isInferred = row.inferred === true;
+
         return (
           <div
             key={row.service_id}
-            className={`rounded-xl border overflow-hidden ${isInferred ? 'border-amber-500/30 bg-amber-500/3' : 'border-slate-800/80 bg-slate-950/20'}`}
+            className="rounded-xl border overflow-hidden transition-all stagger-in"
+            style={{
+              animationDelay: `${rowIdx * 0.04}s`,
+              borderColor: isInferred ? 'rgba(247,183,49,0.3)' : 'var(--border-light)',
+              background: isInferred ? 'rgba(247,183,49,0.03)' : 'rgba(255,255,255,0.5)',
+            }}
           >
-            {/* Collapsed row */}
             <button
               onClick={() => setExpanded(isOpen ? null : row.service_id)}
-              className="w-full grid grid-cols-[1fr_120px_1fr] gap-3 px-3 py-2.5 text-left hover:bg-slate-900/40 transition-colors"
+              className="w-full grid grid-cols-[1fr_110px_1fr] gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--bg-deep)]"
             >
+              {/* Service */}
               <div className="flex items-center gap-2 min-w-0">
-                {isOpen
-                  ? <ChevronDown size={12} className="text-emerald-400 flex-shrink-0" />
-                  : <ChevronRight size={12} className="text-slate-500 flex-shrink-0" />
-                }
+                <span style={{ color: isOpen ? 'var(--cyan-deep)' : 'var(--text-muted)' }}>
+                  {isOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                </span>
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-xs font-semibold text-white truncate">{row.service_name}</p>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className="font-display text-xs font-bold text-[var(--text-primary)] truncate">{row.service_name}</p>
                     {isInferred && (
-                      <span className="text-[7px] font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 flex-shrink-0">
-                        inferred
-                      </span>
+                      <span className="badge-gold font-mono-custom text-[7px] px-1 py-0.5 rounded">inferred</span>
                     )}
                   </div>
-                  <p className="text-[9px] text-slate-500 truncate">{row.domain}</p>
+                  <p className="font-mono-custom text-[9px] text-[var(--text-muted)] truncate">{row.domain}</p>
                 </div>
               </div>
 
-              <div className="flex flex-col items-center justify-center gap-1">
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded border ${confidenceColor(confidenceVal)}`}>
-                  {confidenceVal.toFixed(1)}%
+              {/* Confidence */}
+              <div className="flex flex-col items-center justify-center gap-1.5">
+                <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full ${confidenceCss(confidence)}`}>
+                  {confidence.toFixed(1)}%
                 </span>
-                <div className="w-full h-1 bg-slate-800 rounded-full overflow-hidden">
+                <div className="w-full h-1 bg-[var(--border-light)] rounded-full overflow-hidden">
                   <div
-                    className={`h-full rounded-full ${confidenceBarColor(confidenceVal)}`}
-                    style={{ width: `${Math.min(100, confidenceVal)}%` }}
+                    className="h-full rounded-full metric-bar-fill"
+                    style={{ width: `${Math.min(100, confidence)}%`, background: confidenceBar(confidence) }}
                   />
                 </div>
               </div>
 
+              {/* Keywords */}
               <div className="flex items-center flex-wrap gap-1 min-w-0 overflow-hidden">
-                {(row.matched_keywords || []).slice(0, 4).map((kw) => (
-                  <span key={kw} className="text-[9px] bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 px-1.5 py-0.5 rounded font-mono">
+                {(row.matched_keywords || []).slice(0, 4).map(kw => (
+                  <span key={kw} className="badge-cyan font-mono-custom text-[8px] px-1.5 py-0.5 rounded-lg">
                     {kw}
                   </span>
                 ))}
                 {(row.matched_keywords || []).length > 4 && (
-                  <span className="text-[9px] text-slate-500">+{row.matched_keywords.length - 4} more</span>
+                  <span className="font-mono-custom text-[9px] text-[var(--text-muted)]">
+                    +{row.matched_keywords.length - 4}
+                  </span>
                 )}
               </div>
             </button>
 
-            {/* Expanded panel */}
             {isOpen && (
-              <div className="px-4 pb-4 border-t border-slate-800/60 pt-3 space-y-3">
-
+              <div
+                className="px-5 pb-5 pt-3 space-y-4 border-t border-[var(--border-light)]"
+                style={{ background: 'rgba(240,249,255,0.5)' }}
+              >
                 {/* Inferred warning */}
                 {isInferred && (
-                  <div className="flex items-start gap-2 bg-amber-500/8 border border-amber-500/25 rounded-lg px-3 py-2">
-                    <AlertCircle size={11} className="text-amber-400 mt-0.5 flex-shrink-0" />
-                    <p className="text-[10px] text-amber-300 leading-relaxed">
-                      <strong>Inferred, not stated.</strong> Fewer than 2 FR-IDs explicitly justify this boundary.
-                      It was generated from keyword frequency alone — verify before implementing.
+                  <div className="flex items-start gap-2 badge-gold border rounded-xl px-3 py-2.5">
+                    <AlertCircle size={11} className="flex-shrink-0 mt-0.5" style={{ color: '#b45309' }} />
+                    <p className="text-[10px] leading-relaxed" style={{ color: '#92400e' }}>
+                      <strong>Inferred, not stated.</strong> Fewer than 2 FR-IDs explicitly justify this boundary. Verify before implementing.
                     </p>
                   </div>
                 )}
 
-                {/* DDD boundary justification */}
+                {/* DDD */}
                 {row.boundary_justification && (
-                  <div className="flex items-start gap-2 bg-indigo-500/5 border border-indigo-500/20 rounded-lg px-3 py-2">
-                    <span className="text-[9px] font-bold uppercase tracking-widest text-indigo-400 mt-0.5 flex-shrink-0">DDD</span>
-                    <p className="text-[10px] text-indigo-300 leading-relaxed">{row.boundary_justification}</p>
+                  <div className="flex items-start gap-2 badge-cyan border rounded-xl px-3 py-2.5">
+                    <span className="section-label mt-0.5 flex-shrink-0" style={{ color: 'var(--cyan-deep)' }}>DDD</span>
+                    <p className="text-[10px] text-[var(--cyan-deep)] leading-relaxed">{row.boundary_justification}</p>
                   </div>
                 )}
 
-                {/* FR-IDs that justify this service */}
+                {/* FR-IDs */}
                 {row.justified_fr_ids && row.justified_fr_ids.length > 0 && (
                   <div>
-                    <div className="flex items-center gap-1.5 mb-1.5">
-                      <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">
-                        Justifying FR-IDs ({row.justified_fr_ids.length})
-                      </span>
-                    </div>
+                    <p className="section-label mb-2">Justifying FR-IDs ({row.justified_fr_ids.length})</p>
                     <div className="flex flex-wrap gap-1.5">
-                      {row.justified_fr_ids.map((frId) => {
-                        const affectedServices = impactMap[frId] ?? [];
+                      {row.justified_fr_ids.map(frId => {
+                        const affected = impactMap[frId] ?? [];
                         return (
                           <button
                             key={frId}
                             onClick={() => setImpactTarget(impactTarget === frId ? null : frId)}
-                            className={`group relative text-[9px] font-mono font-bold px-2 py-0.5 rounded border transition-colors ${
+                            className={`font-mono-custom text-[9px] font-bold px-2 py-0.5 rounded-lg border transition-all ${
                               impactTarget === frId
-                                ? 'bg-teal-500/20 text-teal-300 border-teal-500/40'
-                                : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
+                                ? 'badge-gold'
+                                : 'badge-emerald hover:shadow-sm'
                             }`}
                           >
                             {frId}
-                            {affectedServices.length > 1 && (
-                              <span className="ml-1 text-[7px] text-emerald-600">
-                                ×{affectedServices.length}
-                              </span>
+                            {affected.length > 1 && (
+                              <span className="ml-1 text-[7px] opacity-60">×{affected.length}</span>
                             )}
                           </button>
                         );
                       })}
                     </div>
 
-                    {/* Impact analysis panel */}
                     {impactTarget && (impactMap[impactTarget] ?? []).length > 0 && (
-                      <div className="mt-2 flex items-start gap-2 bg-teal-500/5 border border-teal-500/20 rounded-lg px-3 py-2">
-                        <Zap size={10} className="text-teal-400 mt-0.5 flex-shrink-0" />
+                      <div className="mt-2 flex items-start gap-2 badge-cyan border rounded-xl px-3 py-2.5">
+                        <Zap size={10} className="flex-shrink-0 mt-0.5" style={{ color: 'var(--cyan-deep)' }} />
                         <div>
-                          <p className="text-[9px] font-bold text-teal-300 mb-1">
+                          <p className="font-mono-custom text-[9px] font-bold mb-1.5" style={{ color: 'var(--cyan-deep)' }}>
                             Impact of changing {impactTarget}:
                           </p>
                           <div className="flex flex-wrap gap-1">
-                            {(impactMap[impactTarget] ?? []).map((svcId) => (
-                              <span key={svcId} className="text-[9px] font-mono bg-teal-500/10 text-teal-300 border border-teal-500/20 px-1.5 py-0.5 rounded">
+                            {(impactMap[impactTarget] ?? []).map(svcId => (
+                              <span key={svcId} className="badge-cyan font-mono-custom text-[9px] px-1.5 py-0.5 rounded-lg">
                                 {idToName[svcId] ?? svcId}
                               </span>
                             ))}
@@ -176,40 +182,43 @@ export const TraceabilityTable: React.FC<TraceabilityTableProps> = ({ rows, impa
                   </div>
                 )}
 
-                {/* Requirement sentences with line + FR-ID provenance */}
+                {/* Requirement sentences */}
                 <div>
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <FileText size={11} className="text-slate-400" />
-                    <span className="text-[9px] font-bold uppercase tracking-widest text-slate-500">
-                      Requirement Sentences ({row.requirement_sentences.length})
-                    </span>
+                  <div className="flex items-center gap-1.5 mb-3">
+                    <FileText size={10} className="text-[var(--text-muted)]" />
+                    <p className="section-label">Requirement Sentences ({row.requirement_sentences.length})</p>
                   </div>
                   {row.requirement_sentences.length > 0 ? (
-                    row.requirement_sentences.map((sent: RequirementSentence, idx: number) => (
-                      <div key={idx} className="flex gap-2 items-start mb-2">
-                        <div className="flex flex-col items-center gap-0.5 flex-shrink-0 pt-0.5">
-                          <span className="text-[9px] font-bold text-slate-600">R{idx + 1}</span>
-                          <span className="text-[8px] font-mono text-slate-700">L{sent.line}</span>
+                    <div className="space-y-2">
+                      {row.requirement_sentences.map((sent: RequirementSentence, idx: number) => (
+                        <div key={idx} className="flex gap-3 items-start">
+                          <div className="flex flex-col items-center gap-0.5 pt-0.5 flex-shrink-0">
+                            <span className="font-mono-custom text-[8px] font-bold text-[var(--text-muted)]">R{idx + 1}</span>
+                            <span className="font-mono-custom text-[7px] text-[var(--border-mid)]">L{sent.line}</span>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            {sent.fr_ids && sent.fr_ids.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mb-1.5">
+                                {sent.fr_ids.map((id: string) => (
+                                  <span key={id} className="badge-gold font-mono-custom text-[8px] px-1.5 py-0.5 rounded">
+                                    {id}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            <p
+                              className="font-mono-custom text-[10px] text-[var(--text-secondary)] leading-relaxed italic px-3 py-2 rounded-xl border border-[var(--border-light)]"
+                              style={{ background: 'rgba(255,255,255,0.8)' }}
+                            >
+                              "{sent.text}"
+                            </p>
+                          </div>
                         </div>
-                        <div className="min-w-0 flex-1">
-                          {sent.fr_ids && sent.fr_ids.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mb-1">
-                              {sent.fr_ids.map((id: string) => (
-                                <span key={id} className="text-[8px] font-mono font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1.5 py-0.5 rounded">
-                                  {id}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          <p className="text-[10px] text-slate-300 leading-relaxed italic bg-slate-900/60 px-2.5 py-1.5 rounded-lg border border-slate-800/60">
-                            "{sent.text}"
-                          </p>
-                        </div>
-                      </div>
-                    ))
+                      ))}
+                    </div>
                   ) : (
-                    <p className="text-[10px] text-slate-500 italic">
-                      No explicit requirement sentences matched. Service detected via semantic domain patterns.
+                    <p className="font-mono-custom text-[10px] text-[var(--text-muted)] italic">
+                      No explicit sentences matched — service detected via semantic domain patterns.
                     </p>
                   )}
                 </div>

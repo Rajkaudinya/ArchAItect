@@ -2,71 +2,59 @@ import React, { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
 import { GitBranch, Copy, Check, Code, Eye } from 'lucide-react';
 
-interface FlowDiagramProps {
-  mermaid: string;
-}
+interface FlowDiagramProps { mermaid: string; }
 
 mermaid.initialize({
   startOnLoad: false,
-  theme: 'dark',
+  theme: 'base',
   themeVariables: {
-    background: '#0f172a',
-    primaryColor: '#1e293b',
-    primaryTextColor: '#e2e8f0',
-    primaryBorderColor: '#334155',
-    lineColor: '#64748b',
-    secondaryColor: '#1e293b',
-    tertiaryColor: '#0f172a',
-    edgeLabelBackground: '#1e293b',
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: '13px',
-    nodeBorder: '#4ade80',
-    clusterBkg: '#1e293b',
-    titleColor: '#94a3b8',
-    mainBkg: '#1e293b',
-    nodeTextColor: '#e2e8f0',
-    activationBorderColor: '#4ade80',
-    activationBkgColor: '#1e293b',
-    signalColor: '#94a3b8',
-    signalTextColor: '#e2e8f0',
+    background:           '#f0f4f8',
+    primaryColor:         '#e0f9fc',
+    primaryTextColor:     '#0a0f1e',
+    primaryBorderColor:   '#00d4e8',
+    lineColor:            '#00a8be',
+    secondaryColor:       '#fff0f0',
+    tertiaryColor:        '#f0f4f8',
+    edgeLabelBackground:  '#ffffff',
+    fontFamily:           'JetBrains Mono, monospace',
+    fontSize:             '12px',
+    nodeBorder:           '#00d4e8',
+    clusterBkg:           '#e0f9fc',
+    titleColor:           '#475569',
+    mainBkg:              '#ffffff',
+    nodeTextColor:        '#0a0f1e',
+    activationBorderColor:'#ff5c5c',
+    activationBkgColor:   '#fff0f0',
+    signalColor:          '#94a3b8',
+    signalTextColor:      '#0a0f1e',
   },
-  flowchart: {
-    curve: 'basis',
-    padding: 20,
-    htmlLabels: true,
-  },
+  flowchart: { curve: 'basis', padding: 20, htmlLabels: true },
   securityLevel: 'loose',
 });
 
 let diagramCounter = 0;
 
 export const FlowDiagram: React.FC<FlowDiagramProps> = ({ mermaid: mermaidCode }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [copied, setCopied] = useState(false);
-  const [view, setView] = useState<'diagram' | 'code'>('diagram');
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const [copied, setCopied]         = useState(false);
+  const [view, setView]             = useState<'diagram' | 'code'>('diagram');
   const [renderError, setRenderError] = useState<string | null>(null);
-  const [svgContent, setSvgContent] = useState<string>('');
+  const [svgContent, setSvgContent]   = useState<string>('');
 
   useEffect(() => {
     if (!mermaidCode || mermaidCode.trim().length < 20) return;
     if (view !== 'diagram') return;
-
     let cancelled = false;
     const id = `mermaid-flow-${++diagramCounter}`;
-
     (async () => {
       try {
         setRenderError(null);
         const { svg } = await mermaid.render(id, mermaidCode.trim());
         if (!cancelled) setSvgContent(svg);
       } catch (err: any) {
-        if (!cancelled) {
-          setRenderError(err?.message ?? 'Failed to render diagram');
-          setSvgContent('');
-        }
+        if (!cancelled) { setRenderError(err?.message ?? 'Failed to render'); setSvgContent(''); }
       }
     })();
-
     return () => { cancelled = true; };
   }, [mermaidCode, view]);
 
@@ -82,90 +70,101 @@ export const FlowDiagram: React.FC<FlowDiagramProps> = ({ mermaid: mermaidCode }
   const liveUrl = `https://mermaid.live/edit#base64:${btoa(unescape(encodeURIComponent(mermaidCode)))}`;
 
   return (
-    <div className="glass-panel p-5 rounded-2xl border border-slate-800">
+    <div className="glass-panel rounded-2xl overflow-hidden border-[var(--border-light)]">
       {/* Header */}
-      <div className="flex items-center justify-between pb-3.5 border-b border-slate-800/60 mb-4">
-        <div className="flex items-center gap-2">
-          <GitBranch size={14} className="text-teal-400" />
+      <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-light)]">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-[var(--cyan-soft)] border border-[var(--border-cyan)] flex items-center justify-center">
+            <GitBranch size={14} style={{ color: 'var(--cyan-deep)' }} />
+          </div>
           <div>
-            <h4 className="text-sm font-extrabold uppercase tracking-widest text-white">
-              High-Level User Journey
-            </h4>
-            <p className="text-[10px] text-slate-500 mt-0.5 font-light">
-              AI-generated flow from extracted actors, verbs &amp; entities — verify before reviewing service boundaries.
-            </p>
+            <p className="section-label mb-0.5">AI Generated</p>
+            <h4 className="font-display text-sm font-bold text-[var(--text-primary)]">High-Level User Journey</h4>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {/* View toggle */}
-          <div className="flex items-center bg-slate-800 border border-slate-700 rounded overflow-hidden">
-            <button
-              onClick={() => setView('diagram')}
-              className={`flex items-center gap-1 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${
-                view === 'diagram' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Eye size={9} /> Diagram
-            </button>
-            <button
-              onClick={() => setView('code')}
-              className={`flex items-center gap-1 px-2.5 py-1 text-[9px] font-bold uppercase tracking-wider transition-colors ${
-                view === 'code' ? 'bg-teal-600 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Code size={9} /> Code
-            </button>
+          <div className="flex items-center border border-[var(--border-light)] rounded-xl overflow-hidden">
+            {(['diagram', 'code'] as const).map(v => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider transition-colors ${
+                  view === v
+                    ? 'bg-[var(--ink)] text-white'
+                    : 'bg-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+                }`}
+              >
+                {v === 'diagram' ? <Eye size={9} /> : <Code size={9} />}
+                {v}
+              </button>
+            ))}
           </div>
 
           <a
             href={liveUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-[9px] font-bold uppercase tracking-wider text-teal-400 border border-teal-500/30 bg-teal-500/10 hover:bg-teal-500/20 px-2.5 py-1 rounded transition-colors"
+            className="badge-cyan font-mono-custom text-[9px] px-2.5 py-1 rounded-lg hover:shadow-md transition-shadow"
           >
             Mermaid Live ↗
           </a>
 
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider text-slate-400 border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded transition-colors"
+            className="btn-ghost flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[9px] font-bold uppercase tracking-wider"
           >
-            {copied ? <Check size={10} className="text-emerald-400" /> : <Copy size={10} />}
-            {copied ? 'Copied' : 'Copy'}
+            {copied
+              ? <><Check size={10} style={{ color: 'var(--emerald)' }} />Copied</>
+              : <><Copy size={10} />Copy</>
+            }
           </button>
         </div>
       </div>
 
       {/* Content */}
-      {view === 'diagram' ? (
-        <div className="bg-slate-950/60 border border-slate-800/60 rounded-xl p-4 min-h-[180px] flex items-center justify-center overflow-auto">
-          {renderError ? (
-            <div className="text-center">
-              <p className="text-red-400 text-xs mb-2">Render error — showing raw code instead</p>
-              <pre className="text-[10px] font-mono text-slate-400 text-left whitespace-pre overflow-x-auto">
-                {mermaidCode}
-              </pre>
-            </div>
-          ) : svgContent ? (
-            <div
-              ref={containerRef}
-              className="mermaid-output w-full overflow-auto"
-              dangerouslySetInnerHTML={{ __html: svgContent }}
-              style={{ maxWidth: '100%' }}
-            />
-          ) : (
-            <div className="flex items-center gap-2 text-slate-500 text-xs">
-              <div className="w-3 h-3 border border-teal-500 border-t-transparent rounded-full animate-spin" />
-              Rendering diagram…
-            </div>
-          )}
-        </div>
-      ) : (
-        <pre className="text-[10px] font-mono text-slate-300 bg-slate-950/60 border border-slate-800/60 rounded-xl p-4 overflow-x-auto leading-relaxed whitespace-pre">
-          {mermaidCode}
-        </pre>
-      )}
+      <div className="p-5">
+        {view === 'diagram' ? (
+          <div
+            className="rounded-xl p-4 min-h-[200px] flex items-center justify-center overflow-auto border border-[var(--border-light)]"
+            style={{ background: 'rgba(240,249,255,0.7)' }}
+          >
+            {renderError ? (
+              <div className="text-center">
+                <span className="badge-coral text-xs px-3 py-1.5 rounded-lg mb-3 inline-block">Render error</span>
+                <pre className="font-mono-custom text-[10px] text-[var(--text-secondary)] text-left whitespace-pre overflow-x-auto">
+                  {mermaidCode}
+                </pre>
+              </div>
+            ) : svgContent ? (
+              <div
+                ref={containerRef}
+                className="mermaid-output w-full overflow-auto"
+                dangerouslySetInnerHTML={{ __html: svgContent }}
+                style={{ maxWidth: '100%' }}
+              />
+            ) : (
+              <div className="flex flex-col items-center gap-3">
+                <div className="bar-loader">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <div key={i} className="bar-loader-bar" style={{ animationDelay: `${i * 0.1}s` }} />
+                  ))}
+                </div>
+                <span className="font-mono-custom text-[10px] text-[var(--text-muted)] tracking-widest uppercase">
+                  Rendering diagram…
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <pre
+            className="font-mono-custom text-[10px] text-[var(--text-secondary)] rounded-xl p-4 overflow-x-auto leading-relaxed whitespace-pre border border-[var(--border-light)]"
+            style={{ background: 'rgba(240,244,248,0.8)' }}
+          >
+            {mermaidCode}
+          </pre>
+        )}
+      </div>
     </div>
   );
 };

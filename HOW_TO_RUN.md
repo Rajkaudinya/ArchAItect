@@ -59,6 +59,9 @@ The backend uses spaCy for NLP. Download the required model:
 # Download spaCy English language model
 python -m spacy download en_core_web_sm
 ```
+### if it fails run 
+```pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+```
 
 ### Step 5: Configure Environment Variables
 
