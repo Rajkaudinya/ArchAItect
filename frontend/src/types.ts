@@ -72,6 +72,19 @@ export interface ClarificationQuestion {
   impact: string;
 }
 
+export interface CompetitorKnownService {
+  name: string;
+  purpose: string;
+  source_hint: string;
+}
+
+export interface CompetitorIntelligence {
+  competitor: string;
+  why_relevant: string;
+  known_services: CompetitorKnownService[];
+  insights: string[];
+}
+
 export interface AnalysisResult {
   project_id: string;
   raw_filename: string;

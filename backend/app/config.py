@@ -1,8 +1,11 @@
 import os
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
-load_dotenv()
+# The shared .env lives at the repository root, one level above backend/.
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+ENV_FILE = os.path.join(PROJECT_ROOT, ".env")
+load_dotenv(dotenv_path=ENV_FILE, override=False)
 
 if os.getenv("USE_PYDANTIC_SETTINGS"):
     from pydantic_settings import BaseSettings
@@ -21,6 +24,10 @@ class Settings:
     
     # Groq API Configuration
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_API_KEY_3: str = os.getenv("GROQ_API_KEY_3", "")
+    COMPETITOR_GROQ_MODEL: str = os.getenv("COMPETITOR_GROQ_MODEL", "groq/compound-mini")
+    COMPETITOR_GROQ_VERSION: str = os.getenv("COMPETITOR_GROQ_VERSION", "2025-07-23")
+    COMPETITOR_GROQ_MAX_RETRY_SECONDS: int = int(os.getenv("COMPETITOR_GROQ_MAX_RETRY_SECONDS", "8"))
     
     # Server Configuration
     HOST: str = os.getenv("HOST", "127.0.0.1")
@@ -36,7 +43,7 @@ class Settings:
     RATE_LIMIT_PER_MINUTE: int = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
     
     # In-memory database bypass for immediate local running
-    DATA_DIR: str = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+    DATA_DIR: str = os.path.join(BACKEND_DIR, "data")
     
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")

@@ -17,7 +17,7 @@ from app.services.clarification_engine import ClarificationEngine
 
 try:
     from dotenv import load_dotenv
-    _env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    _env_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")
     load_dotenv(dotenv_path=_env_path, override=False)
     from groq import Groq as _Groq
 

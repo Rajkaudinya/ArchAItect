@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
-import { Project, AnalysisResult, Microservice, Dependency } from './types';
+import { Project, AnalysisResult, Microservice, Dependency, CompetitorIntelligence } from './types';
 import { FileUpload } from './components/FileUpload';
 import { GraphCanvas } from './components/GraphCanvas';
 import { MetricsGrid } from './components/MetricsGrid';
 import { TraceabilityTable } from './components/TraceabilityTable';
 import { FlowDiagram } from './components/FlowDiagram';
 import { ClarificationPanel } from './components/ClarificationPanel';
+import { CompetitorIntelligencePanel } from './components/CompetitorIntelligencePanel';
 import {
   RefreshCw, FolderPlus, ChevronDown, Trash2,
-  Cpu, LayoutGrid, GitBranch, Table2, HelpCircle, Zap
+  Cpu, LayoutGrid, GitBranch, Table2, HelpCircle, Zap, Radar
 } from 'lucide-react';
 
 /* ── Page Loader ───────────────────────────────────────────────── */
@@ -67,7 +68,7 @@ function BlobBackground() {
 }
 
 /* ── Tab nav ───────────────────────────────────────────────────── */
-type Tab = 'overview' | 'graph' | 'flow' | 'traceability' | 'clarify';
+type Tab = 'overview' | 'graph' | 'flow' | 'traceability' | 'clarify' | 'competitor';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'overview',     label: 'Overview',      icon: <LayoutGrid size={13} /> },
@@ -75,6 +76,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'clarify',      label: 'Clarifications', icon: <HelpCircle size={13} /> },
   { id: 'graph',        label: 'Topology',       icon: <Cpu size={13} /> },
   { id: 'traceability', label: 'Traceability',   icon: <Table2 size={13} /> },
+  { id: 'competitor',   label: 'Competitor Intel', icon: <Radar size={13} /> },
 ];
 
 /* ── App ───────────────────────────────────────────────────────── */
@@ -86,6 +88,9 @@ function App() {
   const [isCreatingProject, setIsCreatingProject] = useState(false);
   const [isLoading, setIsLoading]               = useState(false);
   const [isClarifying, setIsClarifying]         = useState(false);
+  const [isResearchingCompetitor, setIsResearchingCompetitor] = useState(false);
+  const [competitorIntelligence, setCompetitorIntelligence] = useState<CompetitorIntelligence | null>(null);
+  const [competitorError, setCompetitorError]   = useState('');
   const [pageReady, setPageReady]               = useState(false);
   const [activeTab, setActiveTab]               = useState<Tab>('overview');
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -121,6 +126,8 @@ function App() {
     setCurrentProject(project);
     setIsLoading(true);
     setActiveTab('overview');
+    setCompetitorIntelligence(null);
+    setCompetitorError('');
     try {
       const res = await fetch(`http://localhost:8000/api/v1/analysis/${project.id}`);
       if (res.ok) setAnalysisResult(await res.json());
@@ -192,6 +199,29 @@ function App() {
       });
       if (res.ok) { setAnalysisResult(await res.json()); alert('💾 Architecture saved!'); }
     } catch (err) { console.error(err); alert('Failed to save. Make sure backend is running.'); }
+  };
+
+  const handleCompetitorResearch = async (appType?: string) => {
+    if (!currentProject) return;
+    setIsResearchingCompetitor(true);
+    setCompetitorError('');
+    try {
+      const res = await fetch(`http://localhost:8000/api/v1/analysis/${currentProject.id}/competitor-intelligence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app_type: appType ?? null }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error ?? body?.detail ?? 'Competitor research failed.');
+      }
+      setCompetitorIntelligence(await res.json());
+    } catch (err) {
+      console.error(err);
+      setCompetitorError(err instanceof Error ? err.message : 'Network error during competitor research.');
+    } finally {
+      setIsResearchingCompetitor(false);
+    }
   };
 
   const clarificationCount = (analysisResult?.analysis_metadata?.clarifications ?? []).length;
@@ -490,6 +520,16 @@ function App() {
                       questions={(analysisResult.analysis_metadata?.clarifications ?? []) as any}
                       onSubmitAnswers={handleClarificationSubmit}
                       isProcessing={isClarifying}
+                    />
+                  )}
+
+                  {/* Competitor intelligence */}
+                  {activeTab === 'competitor' && (
+                    <CompetitorIntelligencePanel
+                      intelligence={competitorIntelligence}
+                      isResearching={isResearchingCompetitor}
+                      error={competitorError}
+                      onResearch={handleCompetitorResearch}
                     />
                   )}
                 </div>

@@ -9,6 +9,7 @@ from app.config import settings
 from app.services.parser import DocumentParser
 from app.services.analyzer_v2 import get_analyzer
 from app.services.exporter import ArchitectureExporter
+from app.services.competitor_intelligence import run as run_competitor_intelligence
 from app.models.analysis import AnalysisResult
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,9 @@ class ClarificationAnswer(BaseModel):
 
 class ClarifyRequest(BaseModel):
     answers: List[ClarificationAnswer]
+
+class CompetitorIntelligenceRequest(BaseModel):
+    app_type: Optional[str] = None
 
 @router.post("/upload", response_model=AnalysisResult)
 async def upload_requirement_document(
@@ -179,6 +183,26 @@ def update_analysis(project_id: str, updated_result: AnalysisResult):
     with open(ans_file, "w", encoding="utf-8") as f:
         f.write(updated_result.json())
     return updated_result
+
+
+@router.post("/{project_id}/competitor-intelligence")
+def research_competitor(project_id: str, body: CompetitorIntelligenceRequest):
+    """
+    Research one comparable company's public architecture using Groq web
+    search. This is intentionally opt-in because it makes a paid external call.
+    """
+    ans_file = get_analyses_file(project_id)
+    if not os.path.exists(ans_file):
+        raise HTTPException(status_code=404, detail="No analysis found for this project")
+
+    with open(ans_file, "r", encoding="utf-8") as f:
+        analysis = AnalysisResult(**json.load(f))
+
+    service_names = [service.name for service in analysis.microservices]
+    app_type = body.app_type or ", ".join(
+        sorted({service.domain for service in analysis.microservices})
+    )
+    return run_competitor_intelligence(app_type, service_names)
 
 
 # ============= Clarification Re-Analysis =============
