@@ -6,38 +6,7 @@ interface FlowDiagramProps {
   mermaid: string;
 }
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'dark',
-  themeVariables: {
-    background: '#0f172a',
-    primaryColor: '#1e293b',
-    primaryTextColor: '#e2e8f0',
-    primaryBorderColor: '#334155',
-    lineColor: '#64748b',
-    secondaryColor: '#1e293b',
-    tertiaryColor: '#0f172a',
-    edgeLabelBackground: '#1e293b',
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: '13px',
-    nodeBorder: '#4ade80',
-    clusterBkg: '#1e293b',
-    titleColor: '#94a3b8',
-    mainBkg: '#1e293b',
-    nodeTextColor: '#e2e8f0',
-    activationBorderColor: '#4ade80',
-    activationBkgColor: '#1e293b',
-    signalColor: '#94a3b8',
-    signalTextColor: '#e2e8f0',
-  },
-  flowchart: {
-    curve: 'basis',
-    padding: 20,
-    htmlLabels: true,
-  },
-  securityLevel: 'loose',
-});
-
+let mermaidInitialized = false;
 let diagramCounter = 0;
 
 export const FlowDiagram: React.FC<FlowDiagramProps> = ({ mermaid: mermaidCode }) => {
@@ -46,6 +15,45 @@ export const FlowDiagram: React.FC<FlowDiagramProps> = ({ mermaid: mermaidCode }
   const [view, setView] = useState<'diagram' | 'code'>('diagram');
   const [renderError, setRenderError] = useState<string | null>(null);
   const [svgContent, setSvgContent] = useState<string>('');
+  const [isRendering, setIsRendering] = useState(false);
+
+  // Initialize Mermaid once
+  useEffect(() => {
+    if (!mermaidInitialized) {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        themeVariables: {
+          background: '#0f172a',
+          primaryColor: '#1e293b',
+          primaryTextColor: '#e2e8f0',
+          primaryBorderColor: '#334155',
+          lineColor: '#64748b',
+          secondaryColor: '#1e293b',
+          tertiaryColor: '#0f172a',
+          edgeLabelBackground: '#1e293b',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+          fontSize: '13px',
+          nodeBorder: '#4ade80',
+          clusterBkg: '#1e293b',
+          titleColor: '#94a3b8',
+          mainBkg: '#1e293b',
+          nodeTextColor: '#e2e8f0',
+          activationBorderColor: '#4ade80',
+          activationBkgColor: '#1e293b',
+          signalColor: '#94a3b8',
+          signalTextColor: '#e2e8f0',
+        },
+        flowchart: {
+          curve: 'basis',
+          padding: 20,
+          htmlLabels: true,
+        },
+        securityLevel: 'loose',
+      });
+      mermaidInitialized = true;
+    }
+  }, []); 
 
   useEffect(() => {
     if (!mermaidCode || mermaidCode.trim().length < 20) return;
@@ -56,13 +64,24 @@ export const FlowDiagram: React.FC<FlowDiagramProps> = ({ mermaid: mermaidCode }
 
     (async () => {
       try {
+        setIsRendering(true);
         setRenderError(null);
+        setSvgContent(''); // Clear previous content
+        
+        // Small delay to ensure Mermaid is fully initialized
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
         const { svg } = await mermaid.render(id, mermaidCode.trim());
-        if (!cancelled) setSvgContent(svg);
+        if (!cancelled) {
+          setSvgContent(svg);
+          setIsRendering(false);
+        }
       } catch (err: any) {
+        console.error('Mermaid render error:', err);
         if (!cancelled) {
           setRenderError(err?.message ?? 'Failed to render diagram');
           setSvgContent('');
+          setIsRendering(false);
         }
       }
     })();
@@ -140,12 +159,23 @@ export const FlowDiagram: React.FC<FlowDiagramProps> = ({ mermaid: mermaidCode }
       {/* Content */}
       {view === 'diagram' ? (
         <div className="bg-slate-950/60 border border-slate-800/60 rounded-xl p-4 min-h-[180px] flex items-center justify-center overflow-auto">
-          {renderError ? (
-            <div className="text-center">
-              <p className="text-red-400 text-xs mb-2">Render error — showing raw code instead</p>
-              <pre className="text-[10px] font-mono text-slate-400 text-left whitespace-pre overflow-x-auto">
-                {mermaidCode}
-              </pre>
+          {isRendering ? (
+            <div className="flex items-center gap-2 text-slate-500 text-xs">
+              <div className="w-3 h-3 border border-teal-500 border-t-transparent rounded-full animate-spin" />
+              Rendering diagram…
+            </div>
+          ) : renderError ? (
+            <div className="text-center w-full">
+              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 mb-3">
+                <p className="text-red-400 text-xs font-semibold mb-1">⚠️ Diagram Render Error</p>
+                <p className="text-red-300/70 text-[10px] font-mono">{renderError}</p>
+              </div>
+              <button
+                onClick={() => setView('code')}
+                className="text-[10px] text-slate-400 hover:text-white transition-colors underline"
+              >
+                View raw Mermaid code instead
+              </button>
             </div>
           ) : svgContent ? (
             <div
@@ -157,7 +187,7 @@ export const FlowDiagram: React.FC<FlowDiagramProps> = ({ mermaid: mermaidCode }
           ) : (
             <div className="flex items-center gap-2 text-slate-500 text-xs">
               <div className="w-3 h-3 border border-teal-500 border-t-transparent rounded-full animate-spin" />
-              Rendering diagram…
+              Loading diagram…
             </div>
           )}
         </div>
