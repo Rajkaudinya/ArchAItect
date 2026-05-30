@@ -5,6 +5,7 @@ Uses NLP, entity recognition, semantic clustering, and dependency analysis
 import os
 import re
 import json
+import time
 from typing import Dict, Any, List, Tuple, Optional, Set
 from collections import defaultdict
 from app.models.analysis import (
@@ -15,10 +16,32 @@ from app.services.nlp_engine import NLPEngine
 from app.services.clarification_engine import ClarificationEngine
 
 try:
+    from dotenv import load_dotenv
+    _env_path = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
+    load_dotenv(dotenv_path=_env_path, override=False)
     from groq import Groq as _Groq
-    _groq_client = _Groq(api_key=os.getenv("GROQ_API_KEY", ""))
-except Exception:
+
+    _api_key   = os.getenv("GROQ_API_KEY", "")
+    _api_key_2 = os.getenv("GROQ_API_KEY_2", "")
+
+    # Primary client — used for microservice generation
+    _groq_client = _Groq(api_key=_api_key, max_retries=0) if _api_key else None
+    if _groq_client:
+        print(f"[OK] Groq client #1 initialised (microservices) — key: ...{_api_key[-6:]}")
+    else:
+        print("[WARN] GROQ_API_KEY missing — microservice LLM disabled")
+
+    # Secondary client — used for flow diagram (separate key = separate rate-limit bucket)
+    _groq_client_flow = _Groq(api_key=_api_key_2, max_retries=0) if _api_key_2 else _groq_client
+    if _api_key_2:
+        print(f"[OK] Groq client #2 initialised (flow diagram)   — key: ...{_api_key_2[-6:]}")
+    else:
+        print("[INFO] GROQ_API_KEY_2 not set — flow diagram will share client #1")
+
+except Exception as _groq_init_err:
+    print(f"[WARN] Groq client init failed: {_groq_init_err}")
     _groq_client = None
+    _groq_client_flow = None
 
 # ── The exactly-6 canonical microservices every analysis produces ─────────────
 CANONICAL_SERVICES = [
@@ -209,9 +232,17 @@ class RequirementAnalyzer:
         capabilities = self.nlp_engine.extract_capabilities(enriched_text)
         print(f"   {len(actors)} actors, {len(capabilities)} capabilities, {len(fr_ids)} FR-IDs")
 
-        # Step 2: Build exactly 6 canonical services (LLM-enriched)
-        print("[Step 2] Building 6 canonical microservices via LLM...")
-        services = self._build_six_canonical_services(enriched_text, actors, capabilities, entities)
+        # Step 2: LLM picks the best 6 e-commerce bounded contexts for this document
+        print("[Step 2] Generating e-commerce microservices via LLM (DDD-aware)...")
+        llm_result = self._generate_services_and_deps_via_llm(
+            enriched_text, actors, capabilities, entities, fr_ids
+        )
+        if llm_result:
+            services, _llm_deps = llm_result
+        else:
+            print("   ↳ Falling back to canonical e-commerce 6 services")
+            services = self._build_six_canonical_services(enriched_text, actors, capabilities, entities)
+            _llm_deps = None
         print(f"   {len(services)} services built")
 
         # Step 3: Clarification questions (surface ambiguities for the user)
@@ -222,13 +253,14 @@ class RequirementAnalyzer:
         )
         print(f"   {len(clarifications)} clarifications")
 
-        # Step 4: Flow diagram
+        # Step 4: Flow diagram — brief pause so back-to-back Groq calls don't hit TPM limit
+        time.sleep(2)
         print("[Step 4] Generating user-journey flow diagram...")
-        flow_diagram = self._generate_llm_flow_diagram(actors, capabilities, entities, domain_tuples, enriched_text)
+        flow_diagram = self._generate_llm_flow_diagram(actors, capabilities, entities, domain_tuples, enriched_text, services=services)
 
-        # Step 5: Canonical dependencies (filtered by document presence)
-        print("[Step 5] Building canonical service dependencies...")
-        dependencies = self._build_canonical_dependencies(enriched_text)
+        # Step 5: Dependencies — LLM-generated if available, else canonical fallback
+        print("[Step 5] Building service dependencies...")
+        dependencies = _llm_deps if _llm_deps is not None else self._build_canonical_dependencies(enriched_text)
         print(f"   {len(dependencies)} dependencies")
 
         # Step 6: FR-ID assignment and impact map
@@ -276,7 +308,221 @@ class RequirementAnalyzer:
         return result
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Canonical-6 service builders
+    # LLM-driven service + dependency generation (primary path)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _generate_services_and_deps_via_llm(
+        self,
+        text: str,
+        actors: List[Dict],
+        capabilities: List[Dict],
+        entities: List[Dict],
+        fr_ids: Dict[str, List[Dict]],
+    ) -> Optional[Tuple[List[MicroserviceSchema], List[DependencyInfo]]]:
+        """
+        Ask Groq to design the 6 most appropriate microservices for this document
+        from first principles, applying DDD bounded-context rules:
+          - Data Ownership  : each service owns distinct data entities
+          - Transaction Boundary : independent failure modes / external integrations
+          - Actor Grouping  : distinct actors → distinct service
+
+        Also generates the dependency graph (sync vs async) in the same call.
+        Returns (services, deps) or None on failure (triggers canonical fallback).
+        """
+        if not _groq_client:
+            return None
+
+        actor_lines = "; ".join(
+            f"{a['actor'].capitalize()} ({', '.join(a.get('capabilities', [])[:3])})"
+            for a in actors[:6] if a.get("actor")
+        ) or "User, Admin, System"
+
+        cap_summary = ", ".join(
+            c["capability"] for c in capabilities[:12] if c.get("capability")
+        ) or "register, login, order, pay, notify"
+
+        entity_summary = ", ".join(
+            e.get("value", "") for e in entities[:12]
+            if e.get("value") and len(e.get("value", "")) > 2
+        ) or "user, product, order"
+
+        fr_summary = ", ".join(list(fr_ids.keys())[:10]) or "none detected"
+
+        prompt = f"""You are a senior software architect specialising in e-commerce systems, Domain-Driven Design (DDD), and microservices.
+
+SYSTEM TYPE: E-Commerce Platform
+You are designing the microservice architecture for an e-commerce system described in the requirements below.
+
+REQUIREMENTS DOCUMENT (excerpt):
+{text[:2500]}
+
+NLP ANALYSIS OF THE DOCUMENT:
+- Actors: {actor_lines}
+- Key Capabilities: {cap_summary}
+- Key Entities: {entity_summary}
+- FR-IDs found: {fr_summary}
+
+TASK: Design exactly 6 microservices that best decompose THIS specific e-commerce system.
+
+E-COMMERCE DDD BOUNDED CONTEXTS TO CONSIDER (pick the 6 most relevant to this document):
+- Identity & Access     : user registration, login, JWT, roles, permissions
+- Product & Catalog     : product listings, categories, search, inventory/stock
+- Cart & Checkout       : shopping cart, wishlist, coupon/discount, checkout flow
+- Order Management      : order lifecycle, order tracking, fulfilment, cancellations
+- Payment & Billing     : payment processing, refunds, invoices, payment gateway integration
+- Notification & Comms  : email, SMS, push notifications, event-driven alerts
+- Shipping & Logistics  : delivery tracking, carrier integration, shipping address, dispatch
+- Seller / Vendor Mgmt  : multi-vendor onboarding, seller dashboard, commission (for marketplaces)
+- Reviews & Ratings     : product reviews, ratings, moderation
+- Analytics & Reporting : sales reports, dashboards, business intelligence
+- Loyalty & Promotions  : reward points, promo codes, flash sales, referral programs
+- Customer Support      : tickets, chat, complaints, help desk
+
+CHOOSE the 6 bounded contexts that are most justified by the requirements document above.
+DO NOT pick a context if the document barely mentions it.
+
+DDD BOUNDARY RULES — every service must satisfy at least one:
+1. DATA OWNERSHIP      — owns at least 2 distinct data entities exclusively (no shared tables)
+2. TRANSACTION BOUNDARY — has external system integrations (Stripe, FedEx, SendGrid…) or independent failure modes
+3. ACTOR GROUPING      — distinct actors (customer, admin, seller, system) driving distinct workflows
+
+DATABASE SELECTION:
+- PostgreSQL  : ACID transactions, orders, payments, user accounts
+- MongoDB     : flexible product catalogs, user profiles, reviews
+- Redis       : sessions, carts, caches, queues, rate limiting
+- Elasticsearch: product search, full-text, faceted filtering
+- Cassandra   : high-write event logs, analytics streams
+
+DEPENDENCY TYPES:
+- sync  : caller blocks and waits (e.g. validating stock before checkout)
+- async : fire-and-forget event (e.g. sending confirmation email after order placed)
+
+RULES:
+- Exactly 6 services, chosen from the bounded contexts above based on what THIS document describes
+- 4–6 REST endpoints per service, grounded in the actual requirements text
+- Only include dependencies that are clearly needed based on the document
+- "keywords": 6–10 domain terms from the document that belong to this service (used for traceability)
+
+Return ONLY valid JSON — no prose, no markdown fences:
+{{
+  "services": [
+    {{
+      "id": "kebab-case-service-id",
+      "name": "Human Readable Service Name",
+      "description": "2–3 sentences on what this service owns and does, referencing specific features from the document",
+      "domain": "E-Commerce Domain Name",
+      "database": "PostgreSQL",
+      "database_reasoning": "Why this database fits this service's data and access patterns",
+      "boundary_justification": "Which DDD rule fires and what evidence in the document justifies this as a separate bounded context",
+      "keywords": ["keyword1", "keyword2", "keyword3"],
+      "apis": [
+        {{"method": "POST", "path": "/api/v1/...", "description": "What this endpoint does"}}
+      ],
+      "scaling_recommendations": [
+        "Specific scaling strategy for this service given its e-commerce load profile"
+      ]
+    }}
+  ],
+  "dependencies": [
+    {{
+      "source": "source-service-id",
+      "target": "target-service-id",
+      "type": "sync",
+      "description": "Why source calls target and what data or event flows between them"
+    }}
+  ]
+}}"""
+
+        try:
+            resp = _groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=3500,
+            )
+            raw = resp.choices[0].message.content.strip()
+            raw = re.sub(r"^```(?:json)?\s*\n?", "", raw, flags=re.MULTILINE)
+            raw = re.sub(r"\n?```\s*$",           "", raw, flags=re.MULTILINE)
+            data = json.loads(raw.strip())
+
+            text_lower = text.lower()
+            services: List[MicroserviceSchema] = []
+
+            for svc_data in data.get("services", [])[:8]:
+                sid = (svc_data.get("id") or "").strip().lower().replace(" ", "-")
+                if not sid:
+                    continue
+
+                # Compute keyword matches: LLM-provided keywords + service name words
+                llm_kws  = [k.lower() for k in svc_data.get("keywords", [])]
+                name_kws = [w for w in sid.replace("-", " ").split() if len(w) > 3]
+                all_kws  = list(dict.fromkeys(llm_kws + name_kws))
+                matched  = [kw for kw in all_kws if kw in text_lower]
+                confidence = min(100.0, len(matched) * 15.0 + 25.0)
+
+                apis: List[ApiEndpoint] = []
+                seen_paths: Set[str] = set()
+                for ep in svc_data.get("apis", [])[:6]:
+                    path = ep.get("path", "")
+                    if path and path not in seen_paths:
+                        seen_paths.add(path)
+                        apis.append(ApiEndpoint(
+                            path=path,
+                            method=ep.get("method", "GET").upper(),
+                            description=ep.get("description", ""),
+                            inferred=False,
+                        ))
+
+                services.append(MicroserviceSchema(
+                    id=sid,
+                    name=svc_data.get("name", sid.replace("-", " ").title()),
+                    description=svc_data.get("description", ""),
+                    domain=svc_data.get("domain", ""),
+                    database=svc_data.get("database", "PostgreSQL"),
+                    database_reasoning=svc_data.get("database_reasoning", ""),
+                    boundary_justification=svc_data.get("boundary_justification", ""),
+                    inferred=confidence < 25,
+                    justified_fr_ids=[],
+                    apis=apis,
+                    scaling_recommendations=svc_data.get("scaling_recommendations", []),
+                    metadata={
+                        "confidence": round(confidence, 1),
+                        "matched_keywords": matched[:10],
+                        "llm_generated": True,
+                    },
+                ))
+
+            if len(services) < 3:
+                print(f"   ⚠️  LLM returned {len(services)} services — insufficient, falling back")
+                return None
+
+            # Parse dependencies — only accept refs to valid service IDs
+            svc_ids = {s.id for s in services}
+            deps: List[DependencyInfo] = []
+            seen_dep_keys: Set[tuple] = set()
+            for dep in data.get("dependencies", []):
+                src = dep.get("source", "").strip()
+                tgt = dep.get("target", "").strip()
+                if src in svc_ids and tgt in svc_ids and src != tgt:
+                    key = (src, tgt)
+                    if key not in seen_dep_keys:
+                        seen_dep_keys.add(key)
+                        deps.append(DependencyInfo(
+                            source=src,
+                            target=tgt,
+                            type=dep.get("type", "sync"),
+                            description=dep.get("description", ""),
+                        ))
+
+            print(f"   ✓ LLM generated {len(services)} services, {len(deps)} dependencies")
+            return services, deps
+
+        except Exception as e:
+            print(f"   ⚠️  LLM service generation failed ({e}) — falling back to canonical")
+            return None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Canonical-6 service builders (fallback)
     # ─────────────────────────────────────────────────────────────────────────
 
     def _build_six_canonical_services(
@@ -459,17 +705,32 @@ Return ONLY this JSON (no other text):
         fr_ids: Dict[str, List[Dict]],
         text: str,
     ) -> Dict[str, Set[str]]:
-        """Map FR-IDs to canonical services by keyword overlap."""
+        """
+        Map FR-IDs to services by keyword overlap.
+        Works for both canonical and LLM-generated services:
+          - LLM services carry their keywords in metadata.matched_keywords
+          - Canonical services fall back to CANONICAL_SERVICES template keywords
+        """
         svc_fr: Dict[str, Set[str]] = {s.id: set() for s in services}
         tmpl_map = {t["id"]: t["keywords"] for t in CANONICAL_SERVICES}
+
+        def _get_keywords(svc: MicroserviceSchema) -> List[str]:
+            # Prefer metadata keywords (populated for LLM-generated services)
+            meta_kws = (svc.metadata or {}).get("matched_keywords", [])
+            if meta_kws:
+                return meta_kws
+            # Fallback: canonical template keywords or words from service name/domain
+            tmpl_kws = tmpl_map.get(svc.id, [])
+            if tmpl_kws:
+                return tmpl_kws
+            return [w for w in svc.id.replace("-", " ").split() + svc.domain.lower().split() if len(w) > 3]
+
         for fr_id, occ_list in fr_ids.items():
             for occ in occ_list:
                 sent = occ.get("sentence", "").lower()
                 for svc in services:
-                    kws = tmpl_map.get(svc.id, [])
-                    if any(kw in sent for kw in kws):
+                    if any(kw in sent for kw in _get_keywords(svc)):
                         svc_fr[svc.id].add(fr_id)
-        # Stamp services
         for svc in services:
             svc.justified_fr_ids = sorted(svc_fr[svc.id])
             if fr_ids and len(svc.justified_fr_ids) < 1:
@@ -491,11 +752,14 @@ Return ONLY this JSON (no other text):
         lines = text.split("\n")
         total_lines = sum(1 for line in lines if len(line.strip()) > 20)
         matrix = []
-        tmpl_map = {t["id"]: t for t in CANONICAL_SERVICES}
+        canonical_map = {t["id"]: t for t in CANONICAL_SERVICES}
 
         for svc in services:
-            tmpl = tmpl_map.get(svc.id, {})
-            kws = tmpl.get("keywords", [])
+            # Use metadata keywords (LLM-generated) or canonical template keywords as fallback
+            kws = (svc.metadata or {}).get("matched_keywords", [])
+            if not kws:
+                tmpl = canonical_map.get(svc.id, {})
+                kws = tmpl.get("keywords", [w for w in svc.id.replace("-", " ").split() if len(w) > 3])
             relevant = []
             seen: Set[str] = set()
             matched_line_count = 0
@@ -546,96 +810,86 @@ Return ONLY this JSON (no other text):
         entities: List[str],
         domains: List[Tuple],
         full_text: str,
+        services: Optional[List] = None,
     ) -> str:
         """
-        Use Groq LLM to generate a semantically correct, DDD-aligned Mermaid flowchart
-        of the user journey.  The LLM receives the actual document text as primary
-        context (not just noisy NLP extractions) so it can reason about actors, their
-        roles, and the correct business flow order itself.
-
-        Falls back to the NLP-heuristic method when Groq is unavailable.
+        Generate a detailed, service-aware Mermaid flowchart of the complete
+        e-commerce user journey.  Each subgraph maps to an actual generated
+        microservice.  Includes decision diamonds, error paths, async events,
+        and API-level steps.
+        Falls back to NLP-heuristic diagram when Groq is unavailable.
         """
-        # ── Build actor summary (used as a hint, not the primary source) ────
-        actor_summary_lines: List[str] = []
-        for a in actors[:8]:
-            caps = [c for c in a.get("capabilities", [])[:5] if c]
-            if caps:
-                actor_summary_lines.append(f"  • {a['actor'].capitalize()}: {', '.join(caps)}")
-            else:
-                actor_summary_lines.append(f"  • {a['actor'].capitalize()}")
-        actor_hint = "\n".join(actor_summary_lines) if actor_summary_lines else "  • User (inferred)"
+        # Build actor summary
+        actor_lines = []
+        for a in actors[:6]:
+            caps = [c for c in a.get("capabilities", [])[:4] if c]
+            actor_lines.append(f"  • {a['actor'].capitalize()}: {', '.join(caps) or 'general'}")
+        actor_hint = "\n".join(actor_lines) if actor_lines else "  • Customer\n  • Admin"
 
-        # ── Domain names → bounded context subgraph hints ────────────────────
-        domain_names = [d[0] for d in domains[:10]]
-        domain_hint = ", ".join(domain_names) if domain_names else "Order, Payment, Notification"
+        # Build service summary from actual generated services
+        if services:
+            svc_lines = []
+            for svc in services:
+                api_paths = [f"{a.method} {a.path}" for a in svc.apis[:3]]
+                svc_lines.append(
+                    f"  • {svc.name} [{svc.id}] — {svc.domain}\n"
+                    f"    APIs: {', '.join(api_paths)}"
+                )
+            services_hint = "\n".join(svc_lines)
+        else:
+            domain_names = [d[0] for d in domains[:6]]
+            services_hint = "\n".join(f"  • {d}" for d in domain_names)
 
-        # ── Pass as much document text as the context window allows ─────────
-        # Groq llama3-8b supports 8 k tokens; 3 000 chars ≈ ~750 tokens — safe limit
-        doc_text = full_text[:3000]
+        doc_text = full_text[:2500]
 
         system_msg = (
-            "You are a senior software architect expert in Domain-Driven Design (DDD) "
-            "and microservice architecture. You produce clean, syntactically valid Mermaid "
-            "flowcharts. You output ONLY the raw Mermaid diagram — no prose, no code fences."
+            "You are a senior software architect. You produce syntactically valid Mermaid "
+            "flowcharts. Output ONLY raw Mermaid — no prose, no code fences, no explanation."
         )
 
-        user_msg = f"""TASK: Generate a Mermaid `flowchart TD` that shows the complete, semantically correct HIGH-LEVEL USER JOURNEY for the system described in the requirements document below.
+        user_msg = f"""Generate a clean, high-level Mermaid `flowchart TD` showing the main user journey for this e-commerce system.
 
-═══════════════════════════════════════
 REQUIREMENTS DOCUMENT (excerpt):
-═══════════════════════════════════════
 {doc_text}
 
-═══════════════════════════════════════
-HINTS (extracted by NLP — use only as guidance, the document text is authoritative):
-Actors detected:
+ACTORS:
 {actor_hint}
 
-DDD Bounded Contexts detected:
-{domain_hint}
-═══════════════════════════════════════
+MICROSERVICES (use as subgraph labels):
+{services_hint}
 
-STRICT RULES — follow every one:
-1.  Start with `flowchart TD` (top-down).
-2.  Only include actors that ACTUALLY PARTICIPATE in the flow. If an actor initiates the journey, show it as a stadium/rounded shape: `ActorID([Actor Name])`. DO NOT show actors that are not connected to any steps.
-3.  Use SUBGRAPHS to group steps by DDD bounded context:
-      subgraph PaymentService["Payment & Billing"]
-        ...
-      end
-4.  Show the COMPLETE HAPPY PATH in document order:
-    - Registration / Login → Browse / Search → Select / Add to Cart →
-      Checkout → Payment → Order Confirmation → Fulfillment / Shipping →
-      Delivery → Notification  (adapt to what the document actually describes).
-5.  Add DECISION DIAMONDS ({{...}}) for key branching points:
-    - Authentication check, Stock availability, Payment success/failure,
-      any business rule that produces two outcomes.
-6.  Show at least ONE ERROR / FAILURE path per decision (retry, cancel, error page).
-7.  ARROW SYNTAX (CRITICAL - invalid syntax breaks rendering):
-    - Solid arrows with labels: `A -->|label| B` (correct)
-    - Solid arrows without labels: `A --> B` (correct)
-    - Dashed arrows with labels: `A -.->|label| B` (correct)
-    - Dashed arrows without labels: `A -.-> B` (correct)
-    - NEVER use: `-->|label|>` or `--|label|>` or `--|>` (invalid - extra > at end)
-    - System-triggered async steps use dashed arrows: `A -.->|async| B`
-8.  Each node ID must be a simple alphanumeric token (no spaces, no special chars).
-9.  Labels must be human-readable business language — NOT class names or method names.
-10. Maximum 30 nodes total. Every subgraph must have at least 2 nodes.
-11. Output ONLY the raw Mermaid syntax. No explanation. No ```mermaid fences. No prose.
+INSTRUCTIONS:
+- Show only the KEY STAGES of the flow — one node per major step, not sub-steps.
+- Group stages into subgraphs matching the microservice names above.
+- Show the main happy path from start to end clearly.
+- Add decision diamonds ONLY for the 2–3 most critical branch points (e.g. login check, payment success).
+- Show ONE failure path per decision (e.g. payment failed → retry).
+- Async events (notifications) use dashed arrows.
 
-Generate the diagram now:"""
+STRICT RULES:
+1. `flowchart TD` at the top.
+2. Actor: `Customer([Customer])`  Process: `S1[Step]`  Decision: `D1{{Question?}}`
+3. Subgraph syntax: `subgraph SvcName["Service Name"]` ... `end`
+4. Valid arrows ONLY:  `A --> B`  `A -->|label| B`  `A -.->|label| B`
+5. NEVER use `-->|label|>` or `--|>` — the trailing `>` breaks rendering.
+6. Node IDs: alphanumeric and underscores only.
+7. 15–22 nodes total — keep it readable and high-level.
+8. Output ONLY raw Mermaid. No prose. No code fences.
+
+Generate the diagram:"""
 
         try:
-            if _groq_client is None:
-                raise RuntimeError("Groq client not available")
+            if _groq_client_flow is None:
+                raise RuntimeError("Groq flow client not available")
 
-            response = _groq_client.chat.completions.create(
+            response = _groq_client_flow.chat.completions.create(
                 model="llama-3.1-8b-instant",
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user",   "content": user_msg},
                 ],
-                temperature=0.15,   # low temperature → more deterministic, structurally correct output
-                max_tokens=1800,
+                temperature=0.15,
+                max_tokens=1200,
             )
             raw = response.choices[0].message.content.strip()
 
@@ -656,8 +910,7 @@ Generate the diagram now:"""
 
             # ── Validate: must begin with a Mermaid chart declaration ────────
             if re.match(r"^(flowchart|graph)\s+", raw, re.IGNORECASE):
-                # Basic structural sanity: must have at least 3 arrows
-                if raw.count("-->") >= 3:
+                if raw.count("-->") >= 5 or raw.count("-.->") >= 1:
                     print("   ✅ LLM flow diagram generated via Groq")
                     return raw
                 else:
